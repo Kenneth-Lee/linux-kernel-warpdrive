@@ -1,0 +1,11 @@
+config CRYPTO_DEV_HISILICON
+	depends on VFIO_MDEV_DEVICE
+	tristate "Support for Hiliscon HAC devices"
+
+config CRYPTO_DEV_WD_COMMON
+	tristate "Support for WrapDrive Framework"
+	help
+	  Support for WrapDrive Framework
+
+	  To compile this as a module, choose M here: the module
+	  will be called wd_common.
