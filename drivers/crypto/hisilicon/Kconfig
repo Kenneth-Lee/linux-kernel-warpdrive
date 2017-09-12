@@ -10,3 +10,13 @@ config CRYPTO_DEV_WD_COMMON
 
 	  To compile this as a module, choose M here: the module
 	  will be called wd_common.
+
+config CRYPTO_DEV_WD_DUMMY
+	tristate "Support for WD Dummy Driver"
+	select CRYPTO_DEV_HISILICON
+	depends on CRYPTO_DEV_WD_COMMON && VFIO_NOIOMMU
+	help
+	  Support for WD Dummy Driver
+
+	  To compile this as a module, choose M here: the module
+	  will be called wd_dummy.
