@@ -247,6 +247,7 @@ static int wd_mdev_create(struct kobject *kobj, struct mdev_device *mdev)
 	mdev_state->q = q;
 	init_waitqueue_head(&mdev_state->wait);
 	dev = mdev_dev(mdev);
+	dev->iommu_fwspec = mdev_parent_dev(mdev)->iommu_fwspec;
 	pr_info("Create Mdev:%s\n", dev_name(dev));
 
 	__module_get(wdev->owner);
