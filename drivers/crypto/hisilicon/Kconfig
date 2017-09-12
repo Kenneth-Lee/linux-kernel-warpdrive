@@ -3,6 +3,7 @@ config CRYPTO_DEV_HISILICON
 	select CRYPTO_AEAD
 
 config CRYPTO_DEV_WD_COMMON
+	depends on VFIO_MDEV_DEVICE
 	tristate "Support for WrapDrive Framework"
 	depends on VFIO_MDEV_DEVICE
 	help
@@ -20,3 +21,21 @@ config CRYPTO_DEV_WD_DUMMY
 
 	  To compile this as a module, choose M here: the module
 	  will be called wd_dummy.
+
+config CRYPTO_DEV_HISI_HACV1
+	tristate "Support for Hisilicon HAC V1"
+	select CRYPTO_DEV_HISILICON
+	depends on CRYPTO_DEV_WD_COMMON && ARM64
+	help
+	  Support for Hisilicon HAC Engine in Hi1612 and Hi1616
+
+	  To compile this as a module, choose M here: the module
+	  will be called hisi_hacv1.
+
+config CRYPTO_DEV_HISI_HAC_TEST
+	tristate "For testing Hisilicon HAV V1"
+	select CRYPTO_DEV_HISILICON
+	depends on CRYPTO_DEV_HISI_HACV1
+	help
+	  Support for testing algorithms of HAC Enging of Hisilicon.
+	  This module should not be included in releasing.
