@@ -382,8 +382,12 @@ static int _create_algo_mdev(struct wd_queue *q, struct wd_algo_info *ainfo)
 
 	strncpy(q->vfio_group_path, "/dev/vfio/", PATH_STR_SIZE);
 
+/* todo:some platform do not use noiommu- prefix. We need some other way to judge the name
+ *
 	if (ainfo->dinfo->iommu_type == VFIO_NOIOMMU_IOMMU)
 		strcat(q->vfio_group_path, "noiommu-");
+*/
+
 	strcat(q->vfio_group_path, q->iommu_name);
 out_with_uuid:
 
@@ -484,33 +488,30 @@ int wd_request_queue(struct wd_queue *q, struct wd_capa *capa)
 		return -ENODEV;
 	}
 	dlist_sort_custom(al, _wa_compare_priority);
-get_alg_again:
-	wa = (struct wd_algo_info *)dlist_shift(al);
-	if (!wa) {
-		WD_ERR("Fail to get a WD algo from list!\n");
-		ret = -ENODEV;
-		goto out_with_wa;
-	}
 
-	ret = _create_algo_mdev(q, wa);
-	if (ret) {
-		WD_ERR("Fail to create mdev!\n");
-		free_obj(wa->dinfo);
+	dlist_for_each_data(al, wa, struct wd_algo_info) {
+		ret = _create_algo_mdev(q, wa);
+		if (ret) {
+			WD_ERR("Fail to create mdev!\n");
+			free_obj(wa->dinfo);
+			continue;
+		}
 
-		goto get_alg_again;
-	}
+		memcpy(&q->capa, capa, sizeof(*capa));
 
-	memcpy(&q->capa, capa, sizeof(*capa));
+		ret = _get_vfio_facility(q);
+		if (ret) {
+			WD_ERR("Fail to get VFIO facility!\n");
+			goto out_with_mdev;
+		}
 
-	ret = _get_vfio_facility(q);
-	if (ret) {
-		WD_ERR("Fail to get VFIO facility!\n");
-		goto out_with_mdev;
-	}
-	ret = drv_open(q);
-	if (ret) {
-		WD_ERR("Driver queue init fail!\n");
-		goto out_with_vfio;
+		ret = drv_open(q);
+		if (ret) {
+			WD_ERR("Driver queue init fail!\n");
+			goto out_with_vfio;
+		}
+
+		break;
 	}
 
 	goto out_with_al;
@@ -519,8 +520,6 @@ out_with_vfio:
 	_put_vfio_facility(q);
 out_with_mdev:
 	_destroy_algo_mdev(q);
-out_with_wa:
-	free(wa);
 out_with_al:
 	dlist_destroy(al);
 	errno = ret;
