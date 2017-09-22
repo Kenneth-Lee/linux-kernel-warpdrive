@@ -686,4 +686,6 @@ config CRYPTO_DEV_SAFEXCEL
 	  chain mode, AES cipher mode and SHA1/SHA224/SHA256/SHA512 hash
 	  algorithms.
 
+source "drivers/crypto/hisilicon/Kconfig"
+
 endif # CRYPTO_HW
