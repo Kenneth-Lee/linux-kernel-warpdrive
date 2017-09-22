@@ -33,6 +33,7 @@
 #include <linux/bitops.h>
 #include <linux/property.h>
 #include <trace/events/iommu.h>
+#include <linux/mdev.h>
 
 static struct kset *iommu_group_kset;
 static DEFINE_IDA(iommu_group_ida);
@@ -1791,6 +1792,44 @@ EXPORT_SYMBOL_GPL(iommu_domain_set_attr);
 void iommu_get_resv_regions(struct device *dev, struct list_head *list)
 {
 	const struct iommu_ops *ops = dev->bus->iommu_ops;
+	struct bus_type *mdev_bus;
+
+	/* temp add to support mdev */
+	mdev_bus = symbol_get(mdev_bus_type);
+	if (mdev_bus) {
+		struct device *(*mdev_parent)(struct mdev_device *mdev);
+		struct mdev_device *(*dev_to_mdev)(struct device *dev);
+		struct device *pdev;
+		struct mdev_device *mdev;
+
+		mdev_parent = symbol_get(mdev_parent_dev);
+		if(!mdev_parent)
+			goto out_with_bus_f;
+
+		dev_to_mdev = symbol_get(mdev_from_dev);
+		if(!dev_to_mdev)
+			goto out_with_pdev_f;
+
+		mdev = dev_to_mdev(dev);
+		if(!mdev)
+			goto out_with_mdev_f;
+
+		pdev = mdev_parent(mdev);
+		if(!pdev)
+			goto out_with_mdev_f;
+
+		if(mdev_bus == dev->bus) {
+			ops = pdev->bus->iommu_ops;
+		}
+
+
+out_with_mdev_f:
+		symbol_put(mdev_from_dev);
+out_with_pdev_f:
+		symbol_put(mdev_parent_dev);
+out_with_bus_f:
+		symbol_put(mdev_bus_type);
+	}
 
 	if (ops && ops->get_resv_regions)
 		ops->get_resv_regions(dev, list);

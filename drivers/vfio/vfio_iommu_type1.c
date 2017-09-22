@@ -1181,6 +1181,50 @@ out:
 	return ret;
 }
 
+static int vfio_mdev_type(struct device *dev, void *data)
+{
+	struct bus_type **bus = data;
+	int ret = 0;
+	struct device *(*mdev_parent)(struct mdev_device *mdev);
+	struct mdev_device *(*dev_to_mdev)(struct device *dev);
+	struct device *pdev;
+	struct mdev_device *mdev;
+
+	mdev_parent = symbol_get(mdev_parent_dev);
+	if (!mdev_parent)
+		return -ENODEV;
+	dev_to_mdev = symbol_get(mdev_from_dev);
+	if (!dev_to_mdev) {
+		symbol_put(mdev_parent_dev);
+		pr_err("Fail to get mdev_from_dev!\n");
+		return -ENODEV;
+	}
+	mdev = dev_to_mdev(dev);
+	if (!mdev) {
+		pr_err("Fail to dev_to_mdev!\n");
+		ret = -ENODEV;
+		goto get_exit;
+	}
+	pdev = mdev_parent(mdev);
+	if (!pdev) {
+		pr_err("Fail to parent dev of mdev!\n");
+		ret = -ENODEV;
+		goto get_exit;
+	}
+	if (*bus && *bus != pdev->bus) {
+		pr_err("Bus of devs in this group is not matching!\n");
+		ret = -ENODEV;
+		goto get_exit;
+	}
+
+	*bus = pdev->bus;
+get_exit:
+	symbol_put(mdev_parent_dev);
+	symbol_put(mdev_from_dev);
+
+	return ret;
+}
+
 static int vfio_iommu_type1_attach_group(void *iommu_data,
 					 struct iommu_group *iommu_group)
 {
@@ -1227,6 +1271,13 @@ static int vfio_iommu_type1_attach_group(void *iommu_data,
 	if (mdev_bus) {
 		if ((bus == mdev_bus) && !iommu_present(bus)) {
 			symbol_put(mdev_bus_type);
+			bus = NULL;
+			ret = iommu_group_for_each_dev(iommu_group, &bus,
+						vfio_mdev_type);
+			if (ret < 0)
+				goto out_free;
+			else if (!ret)
+				goto new_domain;
 			if (!iommu->external_domain) {
 				INIT_LIST_HEAD(&domain->group_list);
 				iommu->external_domain = domain;
@@ -1240,7 +1291,7 @@ static int vfio_iommu_type1_attach_group(void *iommu_data,
 		}
 		symbol_put(mdev_bus_type);
 	}
-
+new_domain:
 	domain->domain = iommu_domain_alloc(bus);
 	if (!domain->domain) {
 		ret = -EIO;
@@ -1415,6 +1466,7 @@ static void vfio_iommu_type1_detach_group(void *iommu_data,
 			continue;
 
 		iommu_detach_group(domain->domain, iommu_group);
+
 		list_del(&group->next);
 		kfree(group);
 		/*
