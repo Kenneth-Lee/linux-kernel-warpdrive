@@ -1,0 +1,26 @@
+WD User Land Test Application
+===============================
+
+This directory contains some applications to test the functionality of wd
+framework.
+
+This directory contains the following elements:
+
+wd.[ch]
+	Implementing the wrapdrive basic user API
+
+wd_adapter.[ch]
+	user driver adaptor for wd.c
+
+wd_utils.[ch]
+	Some utitlities function used by wd or its drivers
+
+wd_cipher/wd_dummy/...
+	Implementing the algorithm API base on basic user API of wrapdrive
+
+drv/*
+	user drivers
+
+test/*
+	test application to use the wripdrive library
+
