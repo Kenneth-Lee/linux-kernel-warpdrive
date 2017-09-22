@@ -382,11 +382,8 @@ static int _create_algo_mdev(struct wd_queue *q, struct wd_algo_info *ainfo)
 
 	strncpy(q->vfio_group_path, "/dev/vfio/", PATH_STR_SIZE);
 
-/* todo:some platform do not use noiommu- prefix. We need some other way to judge the name
- *
 	if (ainfo->dinfo->iommu_type == VFIO_NOIOMMU_IOMMU)
 		strcat(q->vfio_group_path, "noiommu-");
-*/
 
 	strcat(q->vfio_group_path, q->iommu_name);
 out_with_uuid:
