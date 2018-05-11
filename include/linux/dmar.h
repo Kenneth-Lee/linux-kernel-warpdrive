@@ -278,7 +278,7 @@ extern void dmar_msi_unmask(struct irq_data *data);
 extern void dmar_msi_mask(struct irq_data *data);
 extern void dmar_msi_read(int irq, struct msi_msg *msg);
 extern void dmar_msi_write(int irq, struct msi_msg *msg);
-extern int dmar_set_interrupt(struct intel_iommu *iommu);
+extern int dmar_set_interrupt(struct intel_iommu *iommu, bool queue_fault);
 extern irqreturn_t dmar_fault(int irq, void *dev_id);
 extern int dmar_alloc_hwirq(int id, int node, void *arg);
 extern void dmar_free_hwirq(int irq);
