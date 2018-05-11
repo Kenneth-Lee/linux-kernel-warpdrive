@@ -5167,6 +5167,52 @@ out_unlock:
 	return ret;
 }
 
+static int intel_iommu_page_response(struct device *dev, struct page_response_msg *msg)
+{
+	struct qi_desc resp;
+	struct intel_iommu *iommu;
+	struct pci_dev *pdev;
+	u8 bus, devfn;
+	u16 rid;
+	u64 desc;
+
+	pdev = to_pci_dev(dev);
+	iommu = device_to_iommu(dev, &bus, &devfn);
+	if (!iommu) {
+		dev_err(dev, "No IOMMU for device to unbind PASID table\n");
+		return -ENODEV;
+	}
+
+	pci_dev_get(pdev);
+	rid = ((u16)bus << 8) | devfn;
+	/* Iommu private data contains  preserved page request descriptor, so we
+	 * inspect the SRR bit for response type then queue response with only
+	 * the private data [54:32].
+	 */
+	desc = msg->private_data;
+	if (desc & QI_PRQ_SRR) {
+		/* Page Stream Response */
+		resp.low = QI_PSTRM_IDX(msg->page_req_group_id) |
+			(desc & QI_PRQ_PRIV) | QI_PSTRM_BUS(PCI_BUS_NUM(pdev->bus->number)) |
+			QI_PSTRM_PASID(msg->pasid) | QI_PSTRM_RESP_TYPE;
+		resp.high = QI_PSTRM_ADDR(msg->addr) | QI_PSTRM_DEVFN(pdev->devfn & 0xff) |
+			QI_PSTRM_RESP_CODE(msg->resp_code);
+	} else {
+		/* Page Group Response */
+		resp.low = QI_PGRP_PASID(msg->pasid) |
+			QI_PGRP_DID(rid) |
+			QI_PGRP_PASID_P(msg->pasid_present) |
+			QI_PGRP_RESP_TYPE;
+		resp.high = QI_PGRP_IDX(msg->page_req_group_id) |
+			(desc & QI_PRQ_PRIV) | QI_PGRP_RESP_CODE(msg->resp_code);
+
+	}
+	qi_submit_sync(&resp, iommu);
+	pci_dev_put(pdev);
+
+	return 0;
+}
+
 static int intel_iommu_map(struct iommu_domain *domain,
 			   unsigned long iova, phys_addr_t hpa,
 			   size_t size, int iommu_prot)
@@ -5593,6 +5639,7 @@ const struct iommu_ops intel_iommu_ops = {
 	.bind_pasid_table	= intel_iommu_bind_pasid_table,
 	.unbind_pasid_table	= intel_iommu_unbind_pasid_table,
 	.sva_invalidate		= intel_iommu_sva_invalidate,
+	.page_response		= intel_iommu_page_response,
 #endif
 	.map			= intel_iommu_map,
 	.unmap			= intel_iommu_unmap,
