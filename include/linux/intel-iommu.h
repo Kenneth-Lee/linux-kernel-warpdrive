@@ -336,6 +336,9 @@ enum {
 #define QI_PSTRM_BUS(bus)	(((u64)(bus)) << 24)
 #define QI_PSTRM_PASID(pasid)	(((u64)(pasid)) << 4)
 
+#define QI_PRQ_SRR	BIT_ULL(0)
+#define QI_PRQ_PRIV	GENMASK_ULL(54, 32)
+
 #define QI_RESP_SUCCESS		0x0
 #define QI_RESP_INVALID		0x1
 #define QI_RESP_FAILURE		0xf
