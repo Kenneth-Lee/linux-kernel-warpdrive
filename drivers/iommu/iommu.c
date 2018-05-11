@@ -914,12 +914,11 @@ int iommu_unregister_device_fault_handler(struct device *dev)
 	}
 
 	/* we cannot unregister handler if there are pending faults */
-	if (list_empty(&param->fault_param->faults)) {
+	if (!list_empty(&param->fault_param->faults)) {
 		ret = -EBUSY;
 		goto unlock;
 	}
 
-	list_del(&param->fault_param->faults);
 	kfree(param->fault_param);
 	param->fault_param = NULL;
 	put_device(dev);
@@ -927,7 +926,7 @@ int iommu_unregister_device_fault_handler(struct device *dev)
 unlock:
 	mutex_unlock(&param->lock);
 
-	return 0;
+	return ret;
 }
 EXPORT_SYMBOL_GPL(iommu_unregister_device_fault_handler);
 
