@@ -972,6 +972,7 @@ int iommu_report_device_fault(struct device *dev, struct iommu_fault_event *evt)
 		exp = get_jiffies_64() + IOMMU_PAGE_RESPONSE_MAXTIME;
 		evt_pending->expire = exp;
 
+		mutex_lock(&fparam->lock);
 		if (list_empty(&fparam->faults)) {
 			/* First pending event, start timer */
 			tmr = &dev->iommu_param->fault_param->timer;
@@ -979,7 +980,6 @@ int iommu_report_device_fault(struct device *dev, struct iommu_fault_event *evt)
 			mod_timer(tmr, exp);
 		}
 
-		mutex_lock(&fparam->lock);
 		list_add_tail(&evt_pending->list, &fparam->faults);
 		mutex_unlock(&fparam->lock);
 	}
