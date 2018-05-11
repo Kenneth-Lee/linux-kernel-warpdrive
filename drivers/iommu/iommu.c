@@ -872,6 +872,11 @@ int iommu_unregister_device_fault_handler(struct device *dev)
 		return -EINVAL;
 
 	mutex_lock(&param->lock);
+	if (!param->fault_param) {
+		ret = -EINVAL;
+		goto unlock;
+	}
+
 	/* we cannot unregister handler if there are pending faults */
 	if (list_empty(&param->fault_param->faults)) {
 		ret = -EBUSY;
