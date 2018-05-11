@@ -190,6 +190,7 @@ struct iommu_resv_region {
  * @pgsize_bitmap: bitmap of all possible supported page sizes
  * @bind_pasid_table: bind pasid table pointer for guest SVM
  * @unbind_pasid_table: unbind pasid table pointer and restore defaults
+ * @sva_invalidate: invalidate translation caches of shared virtual address
  */
 struct iommu_ops {
 	bool (*capable)(enum iommu_cap);
@@ -243,6 +244,8 @@ struct iommu_ops {
 				struct pasid_table_config *pasidt_binfo);
 	void (*unbind_pasid_table)(struct iommu_domain *domain,
 				struct device *dev);
+	int (*sva_invalidate)(struct iommu_domain *domain,
+		struct device *dev, struct tlb_invalidate_info *inv_info);
 
 	unsigned long pgsize_bitmap;
 };
@@ -309,6 +312,9 @@ extern int iommu_bind_pasid_table(struct iommu_domain *domain,
 		struct device *dev, struct pasid_table_config *pasidt_binfo);
 extern void iommu_unbind_pasid_table(struct iommu_domain *domain,
 				struct device *dev);
+extern int iommu_sva_invalidate(struct iommu_domain *domain,
+		struct device *dev, struct tlb_invalidate_info *inv_info);
+
 extern struct iommu_domain *iommu_get_domain_for_dev(struct device *dev);
 extern int iommu_map(struct iommu_domain *domain, unsigned long iova,
 		     phys_addr_t paddr, size_t size, int prot);
@@ -718,6 +724,12 @@ int iommu_bind_pasid_table(struct iommu_domain *domain, struct device *dev,
 static inline
 void iommu_unbind_pasid_table(struct iommu_domain *domain, struct device *dev)
 {
+}
+
+static inline int iommu_sva_invalidate(struct iommu_domain *domain,
+		struct device *dev, struct tlb_invalidate_info *inv_info)
+{
+	return -EINVAL;
 }
 
 #endif /* CONFIG_IOMMU_API */
