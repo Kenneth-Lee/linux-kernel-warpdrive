@@ -138,6 +138,7 @@ config AMD_IOMMU_V2
 # Intel IOMMU support
 config DMAR_TABLE
 	bool
+	select IOMMU_API
 
 config INTEL_IOMMU
 	bool "Support for Intel IOMMU using DMA Remapping Devices"
