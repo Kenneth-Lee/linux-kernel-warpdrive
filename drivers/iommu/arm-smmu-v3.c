@@ -66,6 +66,8 @@
 #define IDR0_ASID16			(1 << 12)
 #define IDR0_ATS			(1 << 10)
 #define IDR0_HYP			(1 << 9)
+#define IDR0_HD				(1 << 7)
+#define IDR0_HA				(1 << 6)
 #define IDR0_BTM			(1 << 5)
 #define IDR0_COHACC			(1 << 4)
 #define IDR0_TTF			GENMASK(3, 2)
@@ -528,6 +530,8 @@ struct arm_smmu_device {
 #define ARM_SMMU_FEAT_E2H		(1 << 15)
 #define ARM_SMMU_FEAT_BTM		(1 << 16)
 #define ARM_SMMU_FEAT_SVA		(1 << 17)
+#define ARM_SMMU_FEAT_HA		(1 << 18)
+#define ARM_SMMU_FEAT_HD		(1 << 19)
 	u32				features;
 
 #define ARM_SMMU_OPT_SKIP_PREFETCH	(1 << 0)
@@ -1567,6 +1571,8 @@ static int arm_smmu_domain_finalise_s1(struct arm_smmu_domain *smmu_domain,
 		.arm_smmu = {
 			.stall		= !!(smmu->features & ARM_SMMU_FEAT_STALL_FORCE),
 			.asid_bits	= smmu->asid_bits,
+			.hw_access	= !!(smmu->features & ARM_SMMU_FEAT_HA),
+			.hw_dirty	= !!(smmu->features & ARM_SMMU_FEAT_HD),
 		},
 	};
 
@@ -2816,6 +2822,12 @@ static int arm_smmu_device_hw_probe(struct arm_smmu_device *smmu)
 		smmu->features |= ARM_SMMU_FEAT_HYP;
 		if (vhe)
 			smmu->features |= ARM_SMMU_FEAT_E2H;
+	}
+
+	if (reg & (IDR0_HA | IDR0_HD)) {
+		smmu->features |= ARM_SMMU_FEAT_HA;
+		if (reg & IDR0_HD)
+			smmu->features |= ARM_SMMU_FEAT_HD;
 	}
 
 	/*
