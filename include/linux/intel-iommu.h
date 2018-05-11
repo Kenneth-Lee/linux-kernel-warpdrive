@@ -445,6 +445,7 @@ struct device_domain_info {
 	u8 pri_enabled:1;
 	u8 ats_supported:1;
 	u8 ats_enabled:1;
+	u8 pasid_table_bound:1;
 	u8 ats_qdep;
 	u64 fault_mask;	/* selected IOMMU faults to be reported */
 	struct device *dev; /* it's NULL for PCIe-to-PCI bridge */
