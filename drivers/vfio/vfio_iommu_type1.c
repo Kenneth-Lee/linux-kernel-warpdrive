@@ -41,6 +41,7 @@
 #include <linux/notifier.h>
 #include <linux/dma-iommu.h>
 #include <linux/irqdomain.h>
+#include <linux/vfio_wdev.h>
 
 #define DRIVER_VERSION  "0.2"
 #define DRIVER_AUTHOR   "Alex Williamson <alex.williamson@redhat.com>"
@@ -88,6 +89,8 @@ struct vfio_dma {
 };
 
 struct vfio_group {
+	/* iommu_group of mdev's parent device */
+	struct iommu_group	*parent_group;
 	struct iommu_group	*iommu_group;
 	struct list_head	next;
 };
@@ -1308,16 +1311,53 @@ static bool vfio_iommu_has_sw_msi(struct iommu_group *group, phys_addr_t *base)
 	return ret;
 }
 
+static int vfio_wdev_type(struct device *dev, void *data)
+{
+	struct iommu_group **group = data;
+	struct iommu_group *pgroup;
+	int (*wdev_mdev)(struct device *dev);
+	struct device *pdev;
+	int ret = 1;
+
+	/* vfio_wdev module is not configurated */
+	wdev_mdev = symbol_get(is_vfio_wdev_mdev);
+	if (!wdev_mdev)
+		return 0;
+
+	/* check if it belongs to vfio_wdev device */
+	if (!wdev_mdev(dev)) {
+		ret = 0;
+		goto get_exit;
+	}
+	pdev = dev->parent;
+	pgroup = iommu_group_get(pdev);
+	if (group && *group && *group != pgroup) {
+		iommu_group_put(pgroup);
+		pr_err("Bus of devs in this group is not matching!\n");
+		ret = -ENODEV;
+		goto get_exit;
+	}
+	if (group)
+		*group = pgroup;
+	iommu_group_put(pgroup);
+
+get_exit:
+	symbol_put(is_vfio_wdev_mdev);
+
+	return ret;
+}
+
 static int vfio_iommu_type1_attach_group(void *iommu_data,
 					 struct iommu_group *iommu_group)
 {
 	struct vfio_iommu *iommu = iommu_data;
 	struct vfio_group *group;
+	struct iommu_group *pgroup;
 	struct vfio_domain *domain, *d;
 	struct bus_type *bus = NULL, *mdev_bus;
-	int ret;
-	bool resv_msi, msi_remap;
-	phys_addr_t resv_msi_base;
+	int ret, is_wdev = 0;
+	bool resv_msi = false, msi_remap;
+	phys_addr_t resv_msi_base = 0;
 
 	mutex_lock(&iommu->lock);
 
@@ -1354,6 +1394,23 @@ static int vfio_iommu_type1_attach_group(void *iommu_data,
 	if (mdev_bus) {
 		if ((bus == mdev_bus) && !iommu_present(bus)) {
 			symbol_put(mdev_bus_type);
+			pgroup = NULL;
+
+			/* Check if it is wdev (wrapdrive device), or go default logic */
+			ret = iommu_group_for_each_dev(iommu_group, &pgroup,
+						       vfio_wdev_type);
+			if (ret < 0)
+				goto out_free;
+			else if (ret > 0) {
+				domain->domain =
+					iommu_group_default_domain(pgroup);
+				group->parent_group = pgroup;
+				INIT_LIST_HEAD(&domain->group_list);
+				list_add(&group->next, &domain->group_list);
+				domain->prot |= IOMMU_CACHE;
+				is_wdev = 1;
+				goto replay_check;
+			}
 			if (!iommu->external_domain) {
 				INIT_LIST_HEAD(&domain->group_list);
 				iommu->external_domain = domain;
@@ -1432,12 +1489,13 @@ static int vfio_iommu_type1_attach_group(void *iommu_data,
 
 	vfio_test_domain_fgsp(domain);
 
+replay_check:
 	/* replay mappings on new domains */
 	ret = vfio_iommu_replay(iommu, domain);
 	if (ret)
 		goto out_detach;
 
-	if (resv_msi) {
+	if (!is_wdev && resv_msi) {
 		ret = iommu_get_msi_cookie(domain->domain, resv_msi_base);
 		if (ret)
 			goto out_detach;
@@ -1452,7 +1510,8 @@ static int vfio_iommu_type1_attach_group(void *iommu_data,
 out_detach:
 	iommu_detach_group(domain->domain, iommu_group);
 out_domain:
-	iommu_domain_free(domain->domain);
+	if (!is_wdev)
+		iommu_domain_free(domain->domain);
 out_free:
 	kfree(domain);
 	kfree(group);
@@ -1514,6 +1573,7 @@ static void vfio_iommu_type1_detach_group(void *iommu_data,
 	struct vfio_iommu *iommu = iommu_data;
 	struct vfio_domain *domain;
 	struct vfio_group *group;
+	int ret;
 
 	mutex_lock(&iommu->lock);
 
@@ -1540,8 +1600,27 @@ static void vfio_iommu_type1_detach_group(void *iommu_data,
 		group = find_iommu_group(domain, iommu_group);
 		if (!group)
 			continue;
+		ret = iommu_group_for_each_dev(iommu_group, NULL,
+					       vfio_wdev_type);
 
-		iommu_detach_group(domain->domain, iommu_group);
+		/* if it is wdev, we don't need to do detach any more */
+		if (ret < 0)
+			goto detach_group_done;
+		if (!ret)
+			iommu_detach_group(domain->domain, iommu_group);
+
+		/* stub for Jean's SVA patch */
+#ifdef __WITH_SVA_PATCH_
+		if (group->sva_enabled) {
+			if (group->parent_group)
+				iommu_group = group->parent_group;
+
+			iommu_group_for_each_dev(iommu_group, NULL,
+						 vfio_iommu_sva_shutdown);
+			group->sva_enabled = false;
+		}
+#endif
+
 		list_del(&group->next);
 		kfree(group);
 		/*
@@ -1558,7 +1637,8 @@ static void vfio_iommu_type1_detach_group(void *iommu_data,
 				else
 					vfio_iommu_unmap_unpin_reaccount(iommu);
 			}
-			iommu_domain_free(domain->domain);
+			if (!ret)
+				iommu_domain_free(domain->domain);
 			list_del(&domain->next);
 			kfree(domain);
 		}
