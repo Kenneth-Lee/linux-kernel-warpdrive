@@ -1,0 +1,8 @@
+config VFIO_WDEV
+	tristate "Support for Waradrive Framework"
+	depends on VFIO_MDEV_DEVICE
+	help
+	  Support for WarpDrive Framework
+
+	  To compile this as a module, choose M here: the module
+	  will be called vfio_wdev.
