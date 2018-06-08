@@ -1,0 +1,17 @@
+config CRYPTO_DEV_HISILICON
+	tristate "Support for HISILICON CRYPTO ACCELERATOR"
+	depends on ARM64
+	help
+	  Enable this to use Hisilicon Hardware Accelerators
+
+config CRYPTO_DEV_HISI_QM
+	tristate "Support for Hisilicon Queue Manager"
+	depends on ARM64 && CRYPTO_DEV_HISILICON
+	help
+	  Support for HiSilicon accelerator queue manager driver
+
+config CRYPTO_DEV_HISI_ZIP
+	tristate "Support for HISI ZIP Driver"
+	depends on VFIO_WDEV && CRYPTO_DEV_HISI_QM
+	help
+	  Support for HiSilicon 1620ES ZIP Driver
