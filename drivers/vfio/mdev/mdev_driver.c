@@ -12,6 +12,7 @@
 
 #include <linux/device.h>
 #include <linux/iommu.h>
+#include <linux/vfio.h>
 #include <linux/mdev.h>
 
 #include "mdev_private.h"
@@ -21,6 +22,17 @@ static int mdev_attach_iommu(struct mdev_device *mdev)
 	int ret;
 	struct iommu_group *group;
 
+#ifdef CONFIG_VFIO_NOIOMMU
+	/* if the parent device has no iommu_fwspec and VFIO_NOIOMMU is
+	 * configured, we assume it is in noiommu mode
+	 */
+	if (!mdev_parent_dev(mdev)->iommu_fwspec) {
+		group = vfio_iommu_group_get(&mdev->dev);
+		if (!group)
+			return -EINVAL;
+		return 0;
+	}
+#endif
 	group = iommu_group_alloc();
 	if (IS_ERR(group))
 		return PTR_ERR(group);

@@ -1792,8 +1792,8 @@ static size_t iommu_pgsize(struct iommu_domain *domain,
 	return pgsize;
 }
 
-int iommu_map(struct iommu_domain *domain, unsigned long iova,
-	      phys_addr_t paddr, size_t size, int prot)
+int __iommu_map(struct iommu_domain *domain, unsigned long iova,
+	      phys_addr_t paddr, size_t size, int prot, struct io_mm *io_mm)
 {
 	unsigned long orig_iova = iova;
 	unsigned int min_pagesz;
@@ -1829,8 +1829,11 @@ int iommu_map(struct iommu_domain *domain, unsigned long iova,
 
 		pr_debug("mapping: iova 0x%lx pa %pa pgsize 0x%zx\n",
 			 iova, &paddr, pgsize);
-
-		ret = domain->ops->map(domain, iova, paddr, pgsize, prot);
+		if (io_mm)
+			ret = domain->ops->sva_map(domain, io_mm, iova,
+						   paddr, pgsize, prot);
+		else
+			ret = domain->ops->map(domain, iova, paddr, pgsize, prot);
 		if (ret)
 			break;
 
@@ -1847,11 +1850,20 @@ int iommu_map(struct iommu_domain *domain, unsigned long iova,
 
 	return ret;
 }
+
+int iommu_map(struct iommu_domain *domain, unsigned long iova,
+	      phys_addr_t paddr, size_t size, int prot)
+{
+	if (unlikely(domain->ops->map == NULL))
+		return -ENODEV;
+
+	return __iommu_map(domain, iova, paddr, size, prot, NULL);
+}
 EXPORT_SYMBOL_GPL(iommu_map);
 
-static size_t __iommu_unmap(struct iommu_domain *domain,
+size_t __iommu_unmap(struct iommu_domain *domain,
 			    unsigned long iova, size_t size,
-			    bool sync)
+			    bool sync, struct io_mm *io_mm)
 {
 	const struct iommu_ops *ops = domain->ops;
 	size_t unmapped_page, unmapped = 0;
@@ -1887,8 +1899,11 @@ static size_t __iommu_unmap(struct iommu_domain *domain,
 	 */
 	while (unmapped < size) {
 		size_t pgsize = iommu_pgsize(domain, iova, size - unmapped);
-
-		unmapped_page = ops->unmap(domain, iova, pgsize);
+		if (io_mm)
+			unmapped_page = ops->sva_unmap(domain, io_mm,
+							iova, pgsize);
+		else
+			unmapped_page = ops->unmap(domain, iova, pgsize);
 		if (!unmapped_page)
 			break;
 
@@ -1912,14 +1927,14 @@ static size_t __iommu_unmap(struct iommu_domain *domain,
 size_t iommu_unmap(struct iommu_domain *domain,
 		   unsigned long iova, size_t size)
 {
-	return __iommu_unmap(domain, iova, size, true);
+	return __iommu_unmap(domain, iova, size, true, NULL);
 }
 EXPORT_SYMBOL_GPL(iommu_unmap);
 
 size_t iommu_unmap_fast(struct iommu_domain *domain,
 			unsigned long iova, size_t size)
 {
-	return __iommu_unmap(domain, iova, size, false);
+	return __iommu_unmap(domain, iova, size, false, NULL);
 }
 EXPORT_SYMBOL_GPL(iommu_unmap_fast);
 

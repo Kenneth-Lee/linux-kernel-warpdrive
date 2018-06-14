@@ -157,7 +157,6 @@ io_mm_alloc(struct iommu_domain *domain, struct device *dev,
 
 	io_mm->flags		= flags;
 	io_mm->mm		= mm;
-	io_mm->notifier.ops	= &iommu_mmu_notifier;
 	io_mm->release		= domain->ops->mm_free;
 	INIT_LIST_HEAD(&io_mm->devices);
 
@@ -173,21 +172,23 @@ io_mm_alloc(struct iommu_domain *domain, struct device *dev,
 		ret = pasid;
 		goto err_free_mm;
 	}
+	if (flags & IOMMU_SVA_FEAT_IOPF) {
+		io_mm->notifier.ops = &iommu_mmu_notifier;
+		ret = mmu_notifier_register(&io_mm->notifier, mm);
+		if (ret)
+			goto err_free_pasid;
 
-	ret = mmu_notifier_register(&io_mm->notifier, mm);
-	if (ret)
-		goto err_free_pasid;
-
-	/*
-	 * Now that the MMU notifier is valid, we can allow users to grab this
-	 * io_mm by setting a valid refcount. Before that it was accessible in
-	 * the IDR but invalid.
-	 *
-	 * The following barrier ensures that users, who obtain the io_mm with
-	 * kref_get_unless_zero, don't read uninitialized fields in the
-	 * structure.
-	 */
-	smp_wmb();
+		/*
+		* Now that the MMU notifier is valid, we can allow users to grab this
+		* io_mm by setting a valid refcount. Before that it was accessible in
+		* the IDR but invalid.
+		*
+		* The following barrier ensures that users, who obtain the io_mm with
+		* kref_get_unless_zero, don't read uninitialized fields in the
+		* structure.
+		*/
+		smp_wmb();
+	}
 	kref_init(&io_mm->kref);
 
 	return io_mm;
@@ -234,7 +235,8 @@ static void io_mm_release(struct kref *kref)
 	 * has already been called. Otherwise we don't need ->release, the io_mm
 	 * isn't attached to anything anymore. Hence no_release.
 	 */
-	mmu_notifier_unregister_no_release(&io_mm->notifier, io_mm->mm);
+	if (io_mm->flags & IOMMU_SVA_FEAT_IOPF)
+		mmu_notifier_unregister_no_release(&io_mm->notifier, io_mm->mm);
 
 	/*
 	 * We can't free the structure here, because if mm exits during
@@ -275,6 +277,18 @@ static void io_mm_put(struct io_mm *io_mm)
 	spin_lock(&iommu_sva_lock);
 	io_mm_put_locked(io_mm);
 	spin_unlock(&iommu_sva_lock);
+}
+
+static struct io_mm *io_mm_find(int pasid)
+{
+	struct io_mm *io_mm;
+
+	spin_lock(&iommu_sva_lock);
+	io_mm = idr_find(&iommu_pasid_idr, pasid);
+	io_mm_get_locked(io_mm);
+	spin_unlock(&iommu_sva_lock);
+
+	return io_mm;
 }
 
 static int io_mm_attach(struct iommu_domain *domain, struct device *dev,
@@ -551,8 +565,11 @@ int iommu_sva_device_init(struct device *dev, unsigned long features,
 	if (!domain || !domain->ops->sva_device_init)
 		return -ENODEV;
 
+	/* For other features, we need this initiation */
+#if 0
 	if (features & ~IOMMU_SVA_FEAT_IOPF)
 		return -EINVAL;
+#endif
 
 	if (features & IOMMU_SVA_FEAT_IOPF) {
 		ret = iommu_register_device_fault_handler(dev, iommu_queue_iopf,
@@ -599,7 +616,8 @@ err_free_param:
 	kfree(param);
 
 err_remove_handler:
-	iommu_unregister_device_fault_handler(dev);
+	if (features & IOMMU_SVA_FEAT_IOPF)
+		iommu_unregister_device_fault_handler(dev);
 
 	return ret;
 }
@@ -790,3 +808,70 @@ struct mm_struct *iommu_sva_find(int pasid)
 	return mm;
 }
 EXPORT_SYMBOL_GPL(iommu_sva_find);
+
+int iommu_sva_map(struct iommu_domain *domain, unsigned long iova,
+	      phys_addr_t paddr, size_t size, int prot, int pasid)
+{
+	int ret;
+	struct io_mm *io_mm = io_mm_find(pasid);
+
+	if (!io_mm)
+		return -ESRCH;
+
+	if (unlikely(domain->ops->sva_map == NULL))
+		return -ENODEV;
+
+	ret = __iommu_map(domain, iova, paddr, size, prot, io_mm);
+	io_mm_put(io_mm);
+
+	return ret;
+}
+EXPORT_SYMBOL_GPL(iommu_sva_map);
+
+static size_t __iommu_sva_unmap(struct iommu_domain *domain,
+		unsigned long iova, size_t size, bool sync, int pasid)
+{
+	int ret;
+	struct io_mm *io_mm = io_mm_find(pasid);
+
+	if (!io_mm)
+		return -ESRCH;
+
+	if (unlikely(domain->ops->sva_unmap == NULL))
+		return -ENODEV;
+
+	ret =  __iommu_unmap(domain, iova, size, sync, io_mm);
+	io_mm_put(io_mm);
+
+	return ret;
+}
+
+size_t iommu_sva_unmap(struct iommu_domain *domain,
+		unsigned long iova, size_t size, int pasid)
+{
+	return __iommu_sva_unmap(domain, iova, size, true, pasid);
+}
+EXPORT_SYMBOL_GPL(iommu_sva_unmap);
+
+size_t iommu_sva_unmap_fast(struct iommu_domain *domain,
+		unsigned long iova, size_t size, int pasid)
+{
+	return __iommu_sva_unmap(domain, iova, size, false, pasid);
+}
+EXPORT_SYMBOL_GPL(iommu_sva_unmap_fast);
+
+/* Really need this function ? Maybe can use MM API for it is SVA? */
+phys_addr_t iommu_sva_iova_to_phys(struct iommu_domain *domain,
+		dma_addr_t iova, int pasid)
+{
+	struct io_mm *io_mm = io_mm_find(pasid);
+
+	if (!io_mm)
+		return 0;
+
+	if (unlikely(domain->ops->iova_to_phys == NULL))
+		return 0;
+
+	return domain->ops->sva_iova_to_phys(domain, io_mm, iova);
+}
+EXPORT_SYMBOL_GPL(iommu_sva_iova_to_phys);

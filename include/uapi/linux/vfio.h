@@ -630,6 +630,8 @@ struct vfio_iommu_type1_info {
 struct vfio_iommu_type1_dma_map {
 	__u32	argsz;
 	__u32	flags;
+	__u32	pasid;
+	__u32	resv;
 #define VFIO_DMA_MAP_FLAG_READ (1 << 0)		/* readable from device */
 #define VFIO_DMA_MAP_FLAG_WRITE (1 << 1)	/* writable from device */
 	__u64	vaddr;				/* Process virtual address */
@@ -652,6 +654,8 @@ struct vfio_iommu_type1_dma_map {
 struct vfio_iommu_type1_dma_unmap {
 	__u32	argsz;
 	__u32	flags;
+	__u32	pasid;
+	__u32	resv;
 	__u64	iova;				/* IO virtual address */
 	__u64	size;				/* Size of mapping (bytes) */
 };
@@ -674,13 +678,19 @@ struct vfio_iommu_type1_dma_unmap {
  * virtual address space. Mapping and unmapping buffers is performed by standard
  * functions such as mmap and malloc.
  *
- * If flag is VFIO_IOMMU_BIND_PID, @pid contains the pid of a foreign process to
- * bind. Otherwise the current task is bound. Given that the caller owns the
- * device, setting this flag grants the caller read and write permissions on the
- * entire address space of foreign process described by @pid. Therefore,
- * permission to perform the bind operation on a foreign process is governed by
- * the ptrace access mode PTRACE_MODE_ATTACH_REALCREDS check. See man ptrace(2)
- * for more information.
+ * If VFIO_IOMMU_BIND_PID bit of flag is set, @pid contains the pid of a
+ * foreign process to bind. Otherwise the current task is bound. Given that the
+ * caller owns the device, setting this flag grants the caller read and write
+ * permissions on the entire address space of foreign process described by
+ * @pid. Therefore, permission to perform the bind operation on a foreign
+ * process is governed by the ptrace access mode PTRACE_MODE_ATTACH_REALCREDS
+ * check. See man ptrace(2) for more information.
+ *
+ * If VFIO_IOMMU_BIND_PRIV bit of flag is set, a private IOPG table will be
+ * created for all devices in the containner. Under this private bind, IOPF is
+ * not supported, and more, users should DMA Map/unmap to abtain/release usable
+ * IOVA while devcies start/stop to work. Other behaviors are the same as this
+ * bit is cleared.
  *
  * On success, VFIO writes a Process Address Space ID (PASID) into @pasid. This
  * ID is unique to a process and can be used on all devices in the container.
@@ -698,6 +708,8 @@ struct vfio_iommu_type1_dma_unmap {
 struct vfio_iommu_type1_bind_process {
 	__u32	flags;
 #define VFIO_IOMMU_BIND_PID		(1 << 0)
+#define VFIO_IOMMU_BIND_PRIV		(1 << 1)
+#define VFIO_IOMMU_BIND_NOPF		(1 << 2)
 	__u32	pasid;
 	__s32	pid;
 };
