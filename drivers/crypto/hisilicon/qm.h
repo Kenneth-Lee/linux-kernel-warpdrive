@@ -8,6 +8,10 @@
 #include <linux/dmapool.h>
 #include <linux/pci.h>
 
+#ifdef CONFIG_CRYPTO_DEV_HISI_SPIMDEV
+#include <linux/vfio_spimdev.h>
+#endif
+
 #define QM_CQE_SIZE			16
 #define QM_Q_DEPTH			1024
 
@@ -61,6 +65,10 @@ struct qm_info {
 
 	struct hisi_acc_qm_hw_ops *ops;
 
+#ifdef CONFIG_CRYPTO_DEV_HISI_SPIMDEV
+	struct vfio_spimdev spimdev;
+	const struct attribute_group **mdev_dev_groups;
+#endif
 };
 #define QM_ADDR(qm, off) ((qm)->io_base + off)
 
@@ -111,6 +119,11 @@ extern struct hisi_qp *hisi_qm_create_qp(struct qm_info *qm, u8 alg_type);
 extern int hisi_qm_start_qp(struct hisi_qp *qp);
 extern void hisi_qm_release_qp(struct hisi_qp *qp);
 extern int hisi_qp_send(struct hisi_qp *qp, void *msg);
+
+#ifdef CONFIG_CRYPTO_DEV_HISI_SPIMDEV
+extern int hisi_qm_register_spimdev(struct qm_info *qm, const char *api_ver);
+extern void hisi_qm_deregister_spimdev(struct qm_info *qm);
+#endif
 
 #define QM_ASSERT(cond)
 
