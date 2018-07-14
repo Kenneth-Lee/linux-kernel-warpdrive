@@ -6,6 +6,13 @@ config CRYPTO_DEV_HISILICON
 config CRYPTO_DEV_HISI_QM
 	tristate
 
+config CRYPTO_DEV_HISI_ZIP
+	tristate "Support for HISI ZIP Driver"
+	depends on ARM64 && CRYPTO_DEV_HISILICON
+	select CRYPTO_DEV_HISI_QM
+	help
+	  Support for HiSilicon 1620ES ZIP Driver
+
 config CRYPTO_DEV_DUMMY
 	tristate "Support for WarpDrive Dummy Driver"
 	depends on CRYPTO_DEV_HISILICON
