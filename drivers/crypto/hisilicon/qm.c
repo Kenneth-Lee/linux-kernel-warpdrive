@@ -739,6 +739,7 @@ static int hisi_qm_get_queue(struct vfio_spimdev *spimdev, unsigned long arg,
 	struct vfio_spimdev_queue *wd_q;
 	u8 alg_type = 0; /* fix me here */
 	int ret;
+	int pasid = arg;
 
 	qp = hisi_qm_create_qp(qm, alg_type);
 	if (IS_ERR(qp))
@@ -755,6 +756,12 @@ static int hisi_qm_get_queue(struct vfio_spimdev *spimdev, unsigned long arg,
 	*q = wd_q;
 	qp->spimdev_q = wd_q;
 	qp->event_cb = _qp_event_notifier;
+
+	QM_SQC(qp)->pasid = pasid;
+	ret = _hacc_mb(qp->qm, MAILBOX_CMD_SQC, qp->sqc.dma, qp->queue_id, 0,
+		       0);
+	if (ret)
+		goto err_with_wd_q;
 
 	ret = hisi_qm_start_qp(qp, arg);
 	if (ret)
@@ -836,7 +843,11 @@ static int _qm_register_spimdev(struct qm_info *qm)
 	struct vfio_spimdev *spimdev = &qm->spimdev;
 
 	spimdev->iommu_type = VFIO_TYPE1_IOMMU;
+#ifdef CONFIG_IOMMU_SVA
 	spimdev->dma_flag = VFIO_SPIMDEV_DMA_MULTI_PROC_MAP;
+#else
+	spimdev->dma_flag = VFIO_SPIMDEV_DMA_SINGLE_PROC_MAP;
+#endif
 	spimdev->owner = THIS_MODULE;
 	spimdev->name = qm->dev_name;
 	spimdev->dev = &pdev->dev;
@@ -1007,11 +1018,22 @@ int hisi_qm_start(struct qm_info *qm)
 					IRQF_SHARED, qm->dev_name, (void *)qm);
 	if (ret)
 		goto err_with_cqc;
+	writel_relaxed(0x0, QM_ADDR(qm, QM_VF_EQ_INT_MASK));
+
+#ifdef CONFIG_CRYPTO_DEV_HISI_SPIMDEV
+	ret = _qm_register_spimdev(qm);
+	if (ret)
+		goto err_with_irq;
 
 	writel_relaxed(0x0, QM_ADDR(qm, QM_VF_EQ_INT_MASK));
+#endif
 
 	return 0;
 
+#ifdef CONFIG_CRYPTO_DEV_HISI_SPIMDEV
+err_with_irq:
+	devm_free_irq(dev, pci_irq_vector(pdev, 0), qm);
+#endif
 err_with_cqc:
 	_uninit_q_buffer(dev, &qm->cqc);
 err_with_sqc:
@@ -1033,6 +1055,10 @@ void hisi_qm_stop(struct qm_info *qm)
 {
 	struct pci_dev *pdev = qm->pdev;
 	struct device *dev = &pdev->dev;
+
+#ifdef CONFIG_CRYPTO_DEV_HISI_SPIMDEV
+	vfio_spimdev_unregister(&qm->spimdev);
+#endif
 
 	devm_free_irq(dev, pci_irq_vector(pdev, 0), qm);
 	_uninit_q_buffer(dev, &qm->cqc);
