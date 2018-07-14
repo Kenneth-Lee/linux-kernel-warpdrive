@@ -410,6 +410,8 @@ vm/
 	- directory with info on the Linux vm code.
 w1/
 	- directory with documents regarding the 1-wire (w1) subsystem.
+warpdrive/
+	- directory with documents about WarpDrive accelerator framework.
 watchdog/
 	- how to auto-reboot Linux if it has "fallen and can't get up". ;-)
 wimax/
