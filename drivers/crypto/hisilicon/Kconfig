@@ -1,0 +1,13 @@
+config CRYPTO_DEV_HISILICON
+	tristate "Support for HISILICON CRYPTO ACCELERATOR"
+	help
+	  Enable this to use Hisilicon Hardware Accelerators
+
+config CRYPTO_DEV_DUMMY
+	tristate "Support for WarpDrive Dummy Driver"
+	depends on CRYPTO_DEV_HISILICON
+	select VFIO_SPIMDEV
+	select VFIO_NOIOMMU
+	help
+	  Support for WarpDrive Dummy Driver, it is used to demostrate how
+	  WarpDrive (spimdev) work
