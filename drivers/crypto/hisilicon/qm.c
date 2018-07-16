@@ -645,6 +645,7 @@ int hisi_qm_start_qp(struct hisi_qp *qp)
 		goto err_with_lock;
 
 	qm->qp_array[qp_index] = qp;
+	init_completion(&qp->completion);
 
 	write_unlock(&qm->qps_lock);
 	return 0;

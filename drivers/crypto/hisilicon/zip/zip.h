@@ -34,9 +34,9 @@ struct hisi_acc_qm_sqc {
 struct hisi_zip_sqe {
 	__u32 consumed;
 	__u32 produced;
-	__u32 comp_date_length;
+	__u32 comp_data_length;
 	__u32 dw3;
-	__u32 input_date_length;
+	__u32 input_data_length;
 	__u32 lba_l;
 	__u32 lba_h;
 	__u32 dw7; /* ... */

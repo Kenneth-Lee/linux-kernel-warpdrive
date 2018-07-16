@@ -19,7 +19,7 @@
 
 extern struct list_head hisi_zip_list;
 
-const char *hisi_zip_alg_type[] = {
+static const char *hisi_zip_alg_type[] = {
 	"none",
 	"reserv",		/* 0x01 */
 	"zlib-deflate",		/* 0x02 */
@@ -82,7 +82,7 @@ static void hisi_zip_qp_event_notifier(struct hisi_qp *qp)
 	complete(&qp->completion);
 }
 
-static int _fill_sqe_v1(void *sqe, void *q_parm, u32 len)
+static int hisi_zip_fill_sqe_v1(void *sqe, void *q_parm, u32 len)
 {
 	struct hisi_zip_sqe *zip_sqe = (struct hisi_zip_sqe *)sqe;
 	struct hisi_zip_qp_ctx *qp_ctx = (struct hisi_zip_qp_ctx *)q_parm;
@@ -90,7 +90,7 @@ static int _fill_sqe_v1(void *sqe, void *q_parm, u32 len)
 
 	memset(zip_sqe, 0, sizeof(struct hisi_zip_sqe));
 
-	zip_sqe->input_date_length = len;
+	zip_sqe->input_data_length = len;
 	zip_sqe->dw9 = qp_ctx->qp->req_type; /* fix me */
 	zip_sqe->dest_avail_out = OUTPUT_BUFFER_SIZE; /* fix me */
 	zip_sqe->source_addr_l = lower_32_bits(buffer->input_dma);
@@ -156,7 +156,6 @@ static int hisi_zip_create_qp(struct qm_info *qm,
 
 	qp->event_cb = hisi_zip_qp_event_notifier;
 	qp->req_type = req_type;
-	init_completion(&qp->completion);
 
 	qp->qp_ctx = ctx;
 	ctx->qp = qp;
@@ -225,7 +224,7 @@ static void hisi_zip_free_comp_ctx(struct crypto_tfm *tfm)
 		hisi_zip_release_qp(&hisi_zip_ctx->qp_ctx[i]);
 }
 
-static int hisi_zip_copy_date_to_buffer(struct hisi_zip_qp_ctx *qp_ctx,
+static int hisi_zip_copy_data_to_buffer(struct hisi_zip_qp_ctx *qp_ctx,
 					const u8 *src, unsigned int slen)
 {
 	struct hisi_zip_buffer *buffer = &qp_ctx->buffer;
@@ -249,7 +248,7 @@ static struct hisi_zip_sqe *hisi_zip_get_writeback_sqe(struct hisi_qp *qp)
 	return sq_base + sq_head * sizeof(struct hisi_zip_sqe);
 }
 
-static int hisi_zip_copy_date_from_buffer(struct hisi_zip_qp_ctx *qp_ctx,
+static int hisi_zip_copy_data_from_buffer(struct hisi_zip_qp_ctx *qp_ctx,
 					   u8 *dst, unsigned int *dlen)
 {
 	struct hisi_zip_buffer *buffer = &qp_ctx->buffer;
@@ -260,12 +259,12 @@ static int hisi_zip_copy_date_from_buffer(struct hisi_zip_qp_ctx *qp_ctx,
 	if (status != 0) {
 		pr_err("hisi zip: %s fail!\n", (qp->alg_type == 0) ?
 		       "compression" : "decompression");
-		return -1;
+		return status;
 	}
 
-	/* fix me: we should limit output date to buffer size */
+	/* fix me: we should limit output data to buffer size */
 	if (zip_sqe->produced > OUTPUT_BUFFER_SIZE)
-		return -1;
+		return -ENOMEM;
 
 	memcpy(dst, buffer->output, zip_sqe->produced);
 	*dlen = zip_sqe->produced;
@@ -281,15 +280,18 @@ static int hisi_zip_compress(struct crypto_tfm *tfm, const u8 *src,
 	struct hisi_zip_qp_ctx *qp_ctx = &hisi_zip_ctx->qp_ctx[QPC_COMP];
 	struct hisi_qp *qp = qp_ctx->qp;
 	struct hisi_zip_sqe *zip_sqe = &qp_ctx->zip_sqe;
+	int ret;
 
-	hisi_zip_copy_date_to_buffer(qp_ctx, src, slen);
+	ret = hisi_zip_copy_data_to_buffer(qp_ctx, src, slen);
+	if (ret < 0)
+		return ret;
 
-	_fill_sqe_v1(zip_sqe, qp_ctx, slen);
+	hisi_zip_fill_sqe_v1(zip_sqe, qp_ctx, slen);
 
 	/* send command to start the compress job */
 	hisi_qp_send(qp, (void *)zip_sqe);
 
-	return hisi_zip_copy_date_from_buffer(qp_ctx, dst, dlen);
+	return hisi_zip_copy_data_from_buffer(qp_ctx, dst, dlen);
 }
 
 static int hisi_zip_decompress(struct crypto_tfm *tfm, const u8 *src,
@@ -299,15 +301,18 @@ static int hisi_zip_decompress(struct crypto_tfm *tfm, const u8 *src,
 	struct hisi_zip_qp_ctx *qp_ctx = &hisi_zip_ctx->qp_ctx[QPC_DECOMP];
 	struct hisi_qp *qp = qp_ctx->qp;
 	struct hisi_zip_sqe *zip_sqe = &qp_ctx->zip_sqe;
+	int ret;
 
-	hisi_zip_copy_date_to_buffer(qp_ctx, src, slen);
+	ret = hisi_zip_copy_data_to_buffer(qp_ctx, src, slen);
+	if (ret < 0)
+		return ret;
 
-	_fill_sqe_v1(zip_sqe, qp_ctx, slen);
+	hisi_zip_fill_sqe_v1(zip_sqe, qp_ctx, slen);
 
 	/* send command to start the compress job */
 	hisi_qp_send(qp, (void *)zip_sqe);
 
-	return hisi_zip_copy_date_from_buffer(qp_ctx, dst, dlen);
+	return hisi_zip_copy_data_from_buffer(qp_ctx, dst, dlen);
 }
 
 static struct crypto_alg hisi_zip_zlib = {
