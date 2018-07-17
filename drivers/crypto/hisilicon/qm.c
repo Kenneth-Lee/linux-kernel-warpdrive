@@ -593,8 +593,6 @@ int hisi_qm_start_qp(struct hisi_qp *qp)
 	struct cqc *cqc;
 	int qp_index = qp->queue_id;
 
-	write_lock(&qm->qps_lock);
-
 	/* set sq and cq context */
 	qp->sqc.addr = QM_SQC(qm) + qp_index;
 	qp->sqc.dma = qm->sqc.dma + qp_index * sizeof(struct sqc);
@@ -609,7 +607,7 @@ int hisi_qm_start_qp(struct hisi_qp *qp)
 		qm->sqe_size * QM_Q_DEPTH + sizeof(struct cqe) * QM_Q_DEPTH,
 		&qp->scqe);
 	if (ret)
-		goto err_with_lock;
+		return ret;
 
 	QM_ASSERT(sqe_size == 64 || sqe_size == 128);
 	if (qm->sqe_size == 64)
@@ -627,10 +625,8 @@ int hisi_qm_start_qp(struct hisi_qp *qp)
 		   (qp->alg_type & SQ_TYPE_MASK) << SQ_TYPE_SHIFT;
 
 	ret = _hacc_mb(qm, MAILBOX_CMD_SQC, qp->sqc.dma, qp_index, 0, 0);
-	if (ret) {
-		pr_err("\n_hacc_mb SQC fail!");
-		goto err_with_lock;
-	}
+	if (ret)
+		return ret;
 
 
 	INIT_QC(cqc, qp->scqe.dma + qm->sqe_size * QM_Q_DEPTH);
@@ -642,16 +638,13 @@ int hisi_qm_start_qp(struct hisi_qp *qp)
 
 	ret = _hacc_mb(qm, MAILBOX_CMD_CQC, qp->cqc.dma, qp_index, 0, 0);
 	if (ret)
-		goto err_with_lock;
+		return ret;
 
+	write_lock(&qm->qps_lock);
 	qm->qp_array[qp_index] = qp;
-
 	write_unlock(&qm->qps_lock);
+
 	return 0;
-
-err_with_lock:
-	write_unlock(&qm->qps_lock);
-	return -EBUSY;
 }
 EXPORT_SYMBOL_GPL(hisi_qm_start_qp);
 
@@ -663,10 +656,11 @@ void hisi_qm_release_qp(struct hisi_qp *qp)
 
 	write_lock(&qm->qps_lock);
 	qm->qp_array[qp->queue_id] = NULL;
+	write_unlock(&qm->qps_lock);
+
 	_uninit_q_buffer(dev, &qp->scqe);
 	kfree(qp);
 	bitmap_clear(qm->qp_bitmap, qid, 1);
-	write_unlock(&qm->qps_lock);
 }
 EXPORT_SYMBOL_GPL(hisi_qm_release_qp);
 
