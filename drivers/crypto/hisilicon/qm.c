@@ -640,6 +640,8 @@ int hisi_qm_start_qp(struct hisi_qp *qp)
 	if (ret)
 		return ret;
 
+	init_completion(&qp->completion);
+
 	write_lock(&qm->qps_lock);
 	qm->qp_array[qp_index] = qp;
 	write_unlock(&qm->qps_lock);
