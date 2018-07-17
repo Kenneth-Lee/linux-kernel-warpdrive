@@ -116,7 +116,7 @@ extern int hisi_qm_start(struct qm_info *qm);
 extern void hisi_qm_stop(struct qm_info *qm);
 extern int hisi_qm_mem_start(struct qm_info *qm);
 extern struct hisi_qp *hisi_qm_create_qp(struct qm_info *qm, u8 alg_type);
-extern int hisi_qm_start_qp(struct hisi_qp *qp);
+extern int hisi_qm_start_qp(struct hisi_qp *qp, unsigned long arg);
 extern void hisi_qm_release_qp(struct hisi_qp *qp);
 extern int hisi_qp_send(struct hisi_qp *qp, void *msg);
 

@@ -584,7 +584,7 @@ err_with_bitset:
 }
 EXPORT_SYMBOL_GPL(hisi_qm_create_qp);
 
-int hisi_qm_start_qp(struct hisi_qp *qp)
+int hisi_qm_start_qp(struct hisi_qp *qp, unsigned long arg)
 {
 	struct qm_info *qm = qp->qm;
 	struct device *dev = &qm->pdev->dev;
@@ -592,6 +592,7 @@ int hisi_qm_start_qp(struct hisi_qp *qp)
 	struct sqc *sqc;
 	struct cqc *cqc;
 	int qp_index = qp->queue_id;
+	int pasid = arg;
 
 	/* set sq and cq context */
 	qp->sqc.addr = QM_SQC(qm) + qp_index;
@@ -601,6 +602,12 @@ int hisi_qm_start_qp(struct hisi_qp *qp)
 	qp->cqc.addr = QM_CQC(qm) + qp_index;
 	qp->cqc.dma = qm->cqc.dma + qp_index * sizeof(struct cqc);
 	cqc = QM_CQC(qp);
+
+	QM_SQC(qp)->pasid = pasid;
+	ret = _hacc_mb(qp->qm, MAILBOX_CMD_SQC, qp->sqc.dma, qp->queue_id, 0,
+		       0);
+	if (ret)
+		return ret;
 
 	/* allocate sq and cq */
 	ret = _init_q_buffer(dev,
@@ -733,7 +740,6 @@ static int hisi_qm_get_queue(struct vfio_spimdev *spimdev, unsigned long arg,
 	struct vfio_spimdev_queue *wd_q;
 	u8 alg_type = 0; /* fix me here */
 	int ret;
-	int pasid = arg;
 
 	qp = hisi_qm_create_qp(qm, alg_type);
 	if (IS_ERR(qp))
@@ -751,13 +757,7 @@ static int hisi_qm_get_queue(struct vfio_spimdev *spimdev, unsigned long arg,
 	qp->spimdev_q = wd_q;
 	qp->event_cb = _qp_event_notifier;
 
-	QM_SQC(qp)->pasid = pasid;
-	ret = _hacc_mb(qp->qm, MAILBOX_CMD_SQC, qp->sqc.dma, qp->queue_id, 0,
-		       0);
-	if (ret)
-		goto err_with_wd_q;
-
-	ret = hisi_qm_start_qp(qp);
+	ret = hisi_qm_start_qp(qp, arg);
 	if (ret)
 		goto err_with_wd_q;
 

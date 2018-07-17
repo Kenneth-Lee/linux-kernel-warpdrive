@@ -27,8 +27,7 @@ static const char *hisi_zip_alg_type[] = {
 	"NULL"
 };
 
-struct hisi_zip_buffer
-{
+struct hisi_zip_buffer {
 	u8 *input;
 	dma_addr_t input_dma;
 	u8 *output;
@@ -164,7 +163,7 @@ static int hisi_zip_create_qp(struct qm_info *qm,
 	if (ret)
 		goto err_with_qp;
 
-	ret = hisi_qm_start_qp(qp);
+	ret = hisi_qm_start_qp(qp, 0);
 	if (ret)
 		goto err_with_qp_buffer;
 
@@ -208,7 +207,7 @@ static int hisi_zip_alloc_comp_ctx(struct crypto_tfm *tfm)
 	}
 
 err:
-	for (j=i-1; j>=0; j--)
+	for (j = i-1; j >= 0; j--)
 		hisi_zip_release_qp(&hisi_zip_ctx->qp_ctx[j]);
 
 	return ret;
@@ -220,7 +219,7 @@ static void hisi_zip_free_comp_ctx(struct crypto_tfm *tfm)
 	int i;
 
 	/* release the qp */
-	for (i=1; i>=0; i--)
+	for (i = 1; i >= 0; i--)
 		hisi_zip_release_qp(&hisi_zip_ctx->qp_ctx[i]);
 }
 
