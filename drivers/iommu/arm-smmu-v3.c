@@ -681,6 +681,12 @@ struct arm_smmu_domain {
 struct arm_smmu_mm {
 	struct io_mm			io_mm;
 	struct iommu_pasid_entry	*cd;
+
+	/* Only for private mode */
+	struct io_pgtable_ops           *pgtbl_ops;
+
+	/* Only for release ! */
+	struct iommu_pasid_table_ops	*ops;
 };
 
 struct arm_smmu_option_prop {
@@ -2313,12 +2319,90 @@ arm_smmu_unmap(struct iommu_domain *domain, unsigned long iova, size_t size)
 	return ret;
 }
 
+/* The following 3 *_sva_* operations are used by user space, also, hope
+* they can be merged into current operations map/unmap .etc, since they
+* are only used for private mode from user space multiple processes DMA map.
+*/
+static int
+arm_smmu_sva_map(struct iommu_domain *domain, struct io_mm *io_mm,
+		 unsigned long iova, phys_addr_t paddr,
+		 size_t size, int prot)
+{
+	struct io_pgtable_ops *ops = to_smmu_mm(io_mm)->pgtbl_ops;
+
+	if (!ops)
+		return -ENODEV;
+
+	return ops->map(ops, iova, paddr, size, prot);
+}
+
+static size_t
+arm_smmu_sva_unmap(struct iommu_domain *domain, struct io_mm *io_mm,
+		unsigned long iova, size_t size)
+{
+	int ret;
+	struct arm_smmu_domain *smmu_domain = to_smmu_domain(domain);
+	struct io_pgtable_ops *ops = to_smmu_mm(io_mm)->pgtbl_ops;
+
+	if (!ops)
+		return 0;
+
+	ret = ops->unmap(ops, iova, size);
+
+	if (ret && smmu_domain->smmu->features & ARM_SMMU_FEAT_ATS)
+		ret = arm_smmu_atc_inv_domain(smmu_domain, 0, iova, size);
+
+	return ret;
+}
+
+static phys_addr_t
+arm_smmu_sva_iova_to_phys(struct iommu_domain *domain,
+		struct io_mm *io_mm, dma_addr_t iova)
+{
+	struct io_pgtable_ops *ops = to_smmu_mm(io_mm)->pgtbl_ops;
+
+	if (domain->type == IOMMU_DOMAIN_IDENTITY)
+		return iova;
+
+	if (!ops)
+		return 0;
+
+	return ops->iova_to_phys(ops, iova);
+}
+
 static void arm_smmu_iotlb_sync(struct iommu_domain *domain)
 {
 	struct arm_smmu_device *smmu = to_smmu_domain(domain)->smmu;
 
 	if (smmu)
 		__arm_smmu_tlb_sync(smmu);
+}
+
+struct iommu_pasid_entry
+*arm_smmu_mm_alloc_priv_cd(struct arm_smmu_domain *smmu_domain,
+		struct arm_smmu_mm *smmu_mm)
+{
+	struct io_pgtable_cfg pgtbl_cfg;
+	struct arm_smmu_device *smmu = smmu_domain->smmu;
+	struct iommu_pasid_table_ops *ops = smmu_domain->s1_cfg.ops;
+
+	pgtbl_cfg = (struct io_pgtable_cfg) {
+		.pgsize_bitmap  = smmu->pgsize_bitmap,
+		.ias            = VA_BITS,
+		.oas            = smmu->ias,
+		.tlb            = &arm_smmu_gather_ops,
+		.iommu_dev      = smmu->dev,
+	};
+
+	if (smmu->features & ARM_SMMU_FEAT_COHERENCY)
+		pgtbl_cfg.quirks = IO_PGTABLE_QUIRK_NO_DMA;
+
+	smmu_mm->pgtbl_ops = alloc_io_pgtable_ops(ARM_64_LPAE_S1,
+					&pgtbl_cfg, smmu_domain);
+	if (!smmu_mm->pgtbl_ops)
+		return ERR_PTR(-ENOMEM);
+
+	return ops->alloc_priv_entry(ops, ARM_64_LPAE_S1, &pgtbl_cfg);
 }
 
 static phys_addr_t
@@ -2397,9 +2481,13 @@ static int arm_smmu_sva_init(struct device *dev, struct iommu_sva_param *param)
 	if (!master->ssid_bits)
 		return -EINVAL;
 
+	/* For other FEATs, sva_init is also in need. */
+#if 0
 	if (param->features & ~IOMMU_SVA_FEAT_IOPF)
 		return -EINVAL;
+#endif
 
+	/* For other FEATs, we don't need enabling pri and iopf_queue. */
 	if (param->features & IOMMU_SVA_FEAT_IOPF) {
 		arm_smmu_enable_pri(master);
 		if (!master->can_fault) {
@@ -2451,7 +2539,10 @@ static struct io_mm *arm_smmu_mm_alloc(struct iommu_domain *domain,
 		return NULL;
 
 	ops = smmu_domain->s1_cfg.ops;
-	cd = ops->alloc_shared_entry(ops, mm);
+	if (flags & IOMMU_SVA_FEAT_PRIV)
+		cd = arm_smmu_mm_alloc_priv_cd(smmu_domain, smmu_mm);
+	else
+		cd = ops->alloc_shared_entry(ops, mm);
 	if (IS_ERR(cd)) {
 		kfree(smmu_mm);
 		return ERR_CAST(cd);
@@ -2465,6 +2556,8 @@ static void arm_smmu_mm_free(struct io_mm *io_mm)
 {
 	struct arm_smmu_mm *smmu_mm = to_smmu_mm(io_mm);
 
+	if (smmu_mm->pgtbl_ops)
+		free_io_pgtable_ops(smmu_mm->pgtbl_ops);
 	iommu_free_pasid_entry(smmu_mm->cd);
 	kfree(smmu_mm);
 }
@@ -2480,8 +2573,14 @@ static int arm_smmu_mm_attach(struct iommu_domain *domain, struct device *dev,
 	if (smmu_domain->stage != ARM_SMMU_DOMAIN_S1)
 		return -EINVAL;
 
+	/**
+	* For supporting SVM/SVM no fault/Multiple process DMA map, we delete
+	* this SVM feature check currently, since we don't know if it is necessary
+	*/
+	#if 0
 	if (!(master->smmu->features & ARM_SMMU_FEAT_SVA))
 		return -ENODEV;
+	#endif
 
 	if (!attach_domain)
 		return 0;
@@ -2752,6 +2851,8 @@ static int arm_smmu_add_device(struct device *dev)
 	}
 
 	master->ssid_bits = min(smmu->ssid_bits, fwspec->num_pasid_bits);
+	if (!strncmp(dev_name(dev), "0000:75:00.0", 16))
+		fwspec->can_stall = true;
 
 	if (fwspec->can_stall && smmu->features & ARM_SMMU_FEAT_STALLS) {
 		master->can_fault = true;
@@ -2940,6 +3041,11 @@ static struct iommu_ops arm_smmu_ops = {
 	.page_response		= arm_smmu_page_response,
 	.map			= arm_smmu_map,
 	.unmap			= arm_smmu_unmap,
+
+	/* Following 3 *sva* operations are for VFIO user space only */
+	.sva_iova_to_phys       = arm_smmu_sva_iova_to_phys,
+	.sva_map                = arm_smmu_sva_map,
+	.sva_unmap              = arm_smmu_sva_unmap,
 	.map_sg			= default_iommu_map_sg,
 	.flush_iotlb_all	= arm_smmu_iotlb_sync,
 	.iotlb_sync		= arm_smmu_iotlb_sync,

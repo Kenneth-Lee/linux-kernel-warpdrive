@@ -78,6 +78,30 @@ struct vfio_spimdev *vfio_spimdev_pdev_spimdev(struct device *dev)
 }
 EXPORT_SYMBOL(vfio_spimdev_pdev_spimdev);
 
+int vfio_spimdev_get(struct device *dev)
+{
+	struct vfio_spimdev *spimdev;
+
+	spimdev = vfio_spimdev_pdev_spimdev(dev);
+	if (IS_ERR(spimdev))
+		return PTR_ERR(spimdev);
+
+	return atomic_inc_return(&spimdev->ref);
+}
+EXPORT_SYMBOL(vfio_spimdev_get);
+
+int vfio_spimdev_put(struct device *dev)
+{
+	struct vfio_spimdev *spimdev;
+
+	spimdev = vfio_spimdev_pdev_spimdev(dev);
+	if (IS_ERR(spimdev))
+		return PTR_ERR(spimdev);
+
+	return atomic_dec_return(&spimdev->ref);
+}
+EXPORT_SYMBOL(vfio_spimdev_put);
+
 struct vfio_spimdev *mdev_spimdev(struct mdev_device *mdev)
 {
 	struct device *pdev = mdev_parent_dev(mdev);
@@ -299,12 +323,11 @@ static long vfio_spimdev_mdev_get_queue(struct mdev_device *mdev,
 	int ret;
 	int fd;
 	int pasid = arg;
-
 	if (!spimdev->ops->get_queue)
 		return -EINVAL;
 
 #ifdef CONFIG_IOMMU_SVA
-	if (_is_valid_pasid(pasid))
+	if (!_is_valid_pasid(pasid))
 		return -EINVAL;
 #endif
 
@@ -353,7 +376,7 @@ static long vfio_spimdev_mdev_ioctl(struct mdev_device *mdev, unsigned int cmd,
 	spimdev = mdev_state->spimdev;
 	if (!spimdev)
 		return -ENODEV;
-
+pr_info("%s, arg = %d\n", __func__, arg);
 	if (cmd == VFIO_SPIMDEV_CMD_GET_Q)
 		return vfio_spimdev_mdev_get_queue(mdev, spimdev, arg);
 
@@ -386,6 +409,7 @@ int vfio_spimdev_register(struct vfio_spimdev *spimdev)
 	}
 
 	spimdev->dev_id = (int)atomic_inc_return(&id);
+	atomic_set(&spimdev->ref, 0);
 	spimdev->cls_dev.parent = spimdev->dev;
 	spimdev->cls_dev.class = spimdev_class;
 	spimdev->cls_dev.release = vfio_spimdev_release;

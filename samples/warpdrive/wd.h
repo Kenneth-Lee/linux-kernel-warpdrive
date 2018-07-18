@@ -48,7 +48,7 @@ typedef int bool;
 
 #define WD_FLAGS_FW_MASK 0x0000FFFF
 #ifndef WD_ERR
-#define WD_ERR(format, args...) printf(format, ##args)
+#define WD_ERR(format, args...) fprintf(stderr, format, ##args)
 #endif
 
 /* Default page size should be 4k size */
@@ -121,7 +121,6 @@ enum wd_addr_flags {
 	memset(objp, 0, sizeof(*objp)); \
 }while(0)
 #define free_obj(objp) if (objp)free(objp)
-#define WD_ERR(format, args...) printf(format, ##args)
 
 struct wd_queue {
 	const char *mdev_name;

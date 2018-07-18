@@ -23,6 +23,51 @@
 #include "wd.h"
 #include "wd_adapter.h"
 
+static int _wd_bind_process(struct wd_queue *q)
+{
+	struct bind_data {
+		struct vfio_iommu_type1_bind bind;
+		struct vfio_iommu_type1_bind_process data;
+	} wd_bind;
+	int ret;
+	__u32 flags = 0;
+
+	if (q->dma_flag & VFIO_SPIMDEV_DMA_MULTI_PROC_MAP)
+		flags = VFIO_IOMMU_BIND_PRIV;
+	else if (q->dma_flag & VFIO_SPIMDEV_DMA_SVM_NO_FAULT)
+		flags = VFIO_IOMMU_BIND_NOPF;
+
+	wd_bind.bind.flags = VFIO_IOMMU_BIND_PROCESS;
+	wd_bind.bind.argsz = sizeof(wd_bind);
+	wd_bind.data.flags = flags;
+	ret = ioctl(q->container, VFIO_IOMMU_BIND, &wd_bind);
+	if (ret)
+		return ret;
+	q->pasid = wd_bind.data.pasid;
+	return ret;
+}
+
+static int _wd_unbind_process(struct wd_queue *q)
+{
+	struct bind_data {
+		struct vfio_iommu_type1_bind bind;
+		struct vfio_iommu_type1_bind_process data;
+	} wd_bind;
+	__u32 flags = 0;
+
+	if (q->dma_flag & VFIO_SPIMDEV_DMA_MULTI_PROC_MAP)
+		flags = VFIO_IOMMU_BIND_PRIV;
+	else if (q->dma_flag & VFIO_SPIMDEV_DMA_SVM_NO_FAULT)
+		flags = VFIO_IOMMU_BIND_NOPF;
+
+	wd_bind.bind.flags = VFIO_IOMMU_BIND_PROCESS;
+	wd_bind.data.pasid = q->pasid;
+	wd_bind.data.flags = flags;
+	wd_bind.bind.argsz = sizeof(wd_bind);
+
+	return ioctl(q->container, VFIO_IOMMU_UNBIND, &wd_bind);
+}
+
 int wd_request_queue(struct wd_queue *q)
 {
 	struct vfio_group_status group_status = {
@@ -107,10 +152,18 @@ int wd_request_queue(struct wd_queue *q)
 		ret = q->mdev;
 		goto err_with_container;
 	}
+	if (!(q->dma_flag & (VFIO_SPIMDEV_DMA_PHY | VFIO_SPIMDEV_DMA_SINGLE_PROC_MAP))) {
+		ret = _wd_bind_process(q);
+		if (ret) {
+			close(q->mdev);
+			WD_ERR("VFIO fails to bind process!\n");
+			goto err_with_container;
 
-	ret = q->fd = ioctl(q->mdev, VFIO_SPIMDEV_CMD_GET_Q);
+		}
+	}
+	ret = q->fd = ioctl(q->mdev, VFIO_SPIMDEV_CMD_GET_Q, (unsigned long)q->pasid);
 	if (ret < 0) {
-		WD_ERR("get queue fail\n");
+		WD_ERR("get queue fail,ret=%d\n", errno);
 		goto err_with_mdev;
 	}
 
@@ -135,6 +188,16 @@ void wd_release_queue(struct wd_queue *q)
 {
 	drv_close(q);
 	close(q->fd);
+	if (!(q->dma_flag & (VFIO_SPIMDEV_DMA_PHY | VFIO_SPIMDEV_DMA_SINGLE_PROC_MAP))) {
+		if (q->pasid <= 0) {
+			WD_ERR("Wd queue pasid ! pasid=%d\n", q->pasid);
+			return;
+		}
+		if (_wd_unbind_process(q)) {
+			WD_ERR("VFIO fails to unbind process!\n");
+			return;
+		}
+	}
 	close(q->mdev);
 	close(q->container);
 	close(q->group);
@@ -202,7 +265,7 @@ static int _wd_mem_share_type1(struct wd_queue *q, const void *addr,
 #ifdef HAVE_SVA
 	else if ((q->dma_flag & VFIO_SPIMDEV_DMA_MULTI_PROC_MAP) &&
 		 (q->pasid > 0))
-		; //todo
+		dma_map.pasid = q->pasid;
 #endif
 	else if ((q->dma_flag & VFIO_SPIMDEV_DMA_SINGLE_PROC_MAP))
 		; //todo

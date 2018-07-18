@@ -105,6 +105,7 @@ struct vfio_spimdev_queue {
 struct vfio_spimdev {
 	const char *name;
 	int status;
+	atomic_t ref;
 	struct module *owner;
 	const struct vfio_spimdev_ops *ops;
 	struct device *dev;

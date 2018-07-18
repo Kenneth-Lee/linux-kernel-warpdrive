@@ -837,7 +837,7 @@ static int _qm_register_spimdev(struct qm_info *qm)
 	struct vfio_spimdev *spimdev = &qm->spimdev;
 
 	spimdev->iommu_type = VFIO_TYPE1_IOMMU;
-	spimdev->dma_flag = VFIO_SPIMDEV_DMA_SINGLE_PROC_MAP;
+	spimdev->dma_flag = VFIO_SPIMDEV_DMA_MULTI_PROC_MAP;
 	spimdev->owner = THIS_MODULE;
 	spimdev->name = qm->dev_name;
 	spimdev->dev = &pdev->dev;

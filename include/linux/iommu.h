@@ -66,6 +66,20 @@ typedef int (*iommu_mm_exit_handler_t)(struct device *dev, int pasid, void *);
 
 #define IOMMU_SVA_FEAT_IOPF		(1 << 0)
 
+/*
+ * For device which can not support fault, however they want to share
+ * the same page table with process, driver should pin everything.
+ */
+#define IOMMU_SVA_FEAT_NOIOPF		(1 << 1)
+
+/*
+ * For device which can not support fault, they also do not want to share
+ * the same page tables with processes, just share virtual address space.
+ * Driver need to pin 'everything'. And the SVA page tables are private for
+ * devices.
+ */
+#define IOMMU_SVA_FEAT_PRIV		(1 << 2)
+
 struct iommu_domain_geometry {
 	dma_addr_t aperture_start; /* First address that can be mapped    */
 	dma_addr_t aperture_end;   /* Last address that can be mapped     */
@@ -260,6 +274,10 @@ struct iommu_sva_param {
  * @mm_invalidate: Invalidate a range of mappings for an mm
  * @map: map a physically contiguous memory region to an iommu domain
  * @unmap: unmap a physically contiguous memory region from an iommu domain
+ * @sva_map: map a physically contiguous memory region to an iommu domain from
+ *           user space
+ * @sva_unmap:unmap a physically contiguous memory region from an iommu domain
+ *                      from user space
  * @map_sg: map a scatter-gather list of physically contiguous memory chunks
  *          to an iommu domain
  * @flush_tlb_all: Synchronously flush all hardware TLBs for this domain
@@ -267,6 +285,7 @@ struct iommu_sva_param {
  * @tlb_sync: Flush all queued ranges from the hardware TLBs and empty flush
  *            queue
  * @iova_to_phys: translate iova to physical address
+ * @sva_iova_to_phys: translate iova to physical address from user space
  * @add_device: add device to iommu grouping
  * @remove_device: remove device from iommu grouping
  * @device_group: find iommu group for a particular device
@@ -314,6 +333,15 @@ struct iommu_ops {
 		   phys_addr_t paddr, size_t size, int prot);
 	size_t (*unmap)(struct iommu_domain *domain, unsigned long iova,
 		     size_t size);
+	/**
+	* these two sva map/unmap are used by user space. Of course, we can merge
+	* them into general map/unmap, however, we just create two news to avoid
+	* to put any effect on our current kernel mapping system.
+	*/
+	int (*sva_map)(struct iommu_domain *domain, struct io_mm *io_mm,
+		unsigned long iova, phys_addr_t paddr, size_t size, int prot);
+	size_t (*sva_unmap)(struct iommu_domain *domain, struct io_mm *io_mm,
+		unsigned long iova, size_t size);
 	size_t (*map_sg)(struct iommu_domain *domain, unsigned long iova,
 			 struct scatterlist *sg, unsigned int nents, int prot);
 	void (*flush_iotlb_all)(struct iommu_domain *domain);
@@ -321,6 +349,10 @@ struct iommu_ops {
 				unsigned long iova, size_t size);
 	void (*iotlb_sync)(struct iommu_domain *domain);
 	phys_addr_t (*iova_to_phys)(struct iommu_domain *domain, dma_addr_t iova);
+
+	/* translate iova of user space to physical address */
+	phys_addr_t (*sva_iova_to_phys)(struct iommu_domain *domain,
+		struct io_mm *io_mm, dma_addr_t iova);
 	int (*add_device)(struct device *dev);
 	void (*remove_device)(struct device *dev);
 	struct iommu_group *(*device_group)(struct device *dev);
@@ -550,6 +582,14 @@ extern size_t iommu_unmap_fast(struct iommu_domain *domain,
 extern size_t default_iommu_map_sg(struct iommu_domain *domain, unsigned long iova,
 				struct scatterlist *sg,unsigned int nents,
 				int prot);
+
+extern int __iommu_map(struct iommu_domain *domain, unsigned long iova,
+			phys_addr_t paddr, size_t size, int prot,
+			struct io_mm *io_mm);
+extern size_t __iommu_unmap(struct iommu_domain *domain,
+			unsigned long iova, size_t size,
+			bool sync, struct io_mm *io_mm);
+
 extern phys_addr_t iommu_iova_to_phys(struct iommu_domain *domain, dma_addr_t iova);
 extern void iommu_set_fault_handler(struct iommu_domain *domain,
 			iommu_fault_handler_t handler, void *token);
@@ -771,6 +811,20 @@ static inline int iommu_domain_window_enable(struct iommu_domain *domain,
 static inline void iommu_domain_window_disable(struct iommu_domain *domain,
 					       u32 wnd_nr)
 {
+}
+
+static inline int __iommu_map(struct iommu_domain *domain, unsigned long iova,
+				phys_addr_t paddr, size_t size, int prot,
+				struct io_mm *io_mm)
+{
+	return -ENODEV;
+}
+
+static inline size_t __iommu_unmap(struct iommu_domain *domain,
+				unsigned long iova, size_t size,
+				bool sync, struct io_mm *io_mm)
+{
+	return -ENODEV;
 }
 
 static inline phys_addr_t iommu_iova_to_phys(struct iommu_domain *domain, dma_addr_t iova)
@@ -1026,6 +1080,14 @@ extern int __iommu_sva_unbind_device(struct device *dev, int pasid);
 extern void __iommu_sva_unbind_dev_all(struct device *dev);
 
 extern struct mm_struct *iommu_sva_find(int pasid);
+extern int iommu_sva_map(struct iommu_domain *domain, unsigned long iova,
+	      phys_addr_t paddr, size_t size, int prot, int pasid);
+extern size_t iommu_sva_unmap(struct iommu_domain *domain,
+		unsigned long iova, size_t size, int pasid);
+extern size_t iommu_sva_unmap_fast(struct iommu_domain *domain,
+		unsigned long iova, size_t size, int pasid);
+extern phys_addr_t iommu_sva_iova_to_phys(struct iommu_domain *domain,
+		dma_addr_t iova, int pasid);
 #else /* CONFIG_IOMMU_SVA */
 static inline int iommu_sva_device_init(struct device *dev,
 					unsigned long features,
@@ -1059,6 +1121,30 @@ static inline void __iommu_sva_unbind_dev_all(struct device *dev)
 static inline struct mm_struct *iommu_sva_find(int pasid)
 {
 	return NULL;
+}
+
+static inline int iommu_sva_map(struct iommu_domain *domain, unsigned long iova,
+	      phys_addr_t paddr, size_t size, int prot, int pasid)
+{
+	return -ENODEV;
+}
+
+static inline size_t iommu_sva_unmap(struct iommu_domain *domain,
+		unsigned long iova, size_t size, int pasid)
+{
+	return -ENODEV;
+}
+
+static inline size_t iommu_sva_unmap_fast(struct iommu_domain *domain,
+		unsigned long iova, size_t size, int pasid)
+{
+	return -ENODEV;
+}
+
+static inline phys_addr_t iommu_sva_iova_to_phys(struct iommu_domain *domain,
+		dma_addr_t iova, int pasid)
+{
+	return 0;
 }
 #endif /* CONFIG_IOMMU_SVA */
 
