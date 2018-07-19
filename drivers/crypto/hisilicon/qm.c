@@ -240,7 +240,7 @@ struct doorbell {
 struct qm_info;
 
 struct hisi_acc_qm_hw_ops {
-	int (*vft_config)(struct qm_info *qm, u16 base, u32 number);
+	int (*vft_config)(struct qm_info *qm, u16 base, u32 number, u32 devfn);
 	int (*aeq_config)(struct qm_info *qm);
 	int (*get_vft_info)(struct qm_info *qm, u32 *base, u32 *number);
 };
@@ -472,8 +472,13 @@ static inline int _init_bt(struct qm_info *qm, struct device *dev, size_t size,
 	return 0;
 }
 
-/* the config should be conducted after hisi_acc_init_qm_mem() */
-static int _vft_common_config(struct qm_info *qm, u16 base, u32 number)
+/*
+ * The config should be conducted after hisi_qm_mem_start().
+ *
+ * PF uses this function to configure queue resources for itself and its VFs.
+ * If devfn != 0, configuration is for a VF.
+ */
+static int _vft_common_config(struct qm_info *qm, u16 base, u32 number, u32 devfn)
 {
 	u64 tmp;
 	int ret;
@@ -483,7 +488,7 @@ static int _vft_common_config(struct qm_info *qm, u16 base, u32 number)
 		return ret;
 	_IOWL(0x0, QM_VFT_CFG_OP_WR);
 	_IOWL(QM_SQC_VFT, QM_VFT_CFG_TYPE);
-	_IOWL(qm->pdev->devfn, QM_VFT_CFG_ADDRESS);
+	_IOWL(devfn, QM_VFT_CFG_ADDRESS);
 
 	tmp = QM_SQC_VFT_BUF_SIZE		       |
 	      QM_SQC_VFT_SQC_SIZE			|
@@ -503,7 +508,7 @@ static int _vft_common_config(struct qm_info *qm, u16 base, u32 number)
 
 	_IOWL(0x0, QM_VFT_CFG_OP_WR);
 	_IOWL(QM_CQC_VFT, QM_VFT_CFG_TYPE);
-	_IOWL(qm->pdev->devfn, QM_VFT_CFG_ADDRESS);
+	_IOWL(devfn, QM_VFT_CFG_ADDRESS);
 
 	tmp = QM_CQC_VFT_BUF_SIZE		       |
 	      QM_CQC_VFT_SQC_SIZE			|
@@ -521,11 +526,36 @@ static int _vft_common_config(struct qm_info *qm, u16 base, u32 number)
 	return 0;
 }
 
+static int get_vft_info_v1(struct qm_info *qm, u32 *base, u32 *number)
+{
+	/*
+	 * QM hardware v1 can not support this feature, e.g.read vft
+	 * configuration by mailbox.
+	 *
+	 * So it is hard to get vft configuration in guest.
+	 * However, a hacking way to do this is to let PF queue number and VF
+	 * number to be fixed values in QM v1, which is really ugly.
+	 *
+	 * Or we just do not support VF in ES version.
+	 */
+
+	/*
+	 * Debug: here we just assume qp number for PF is 64 and only one VF
+	 * enable
+	 *
+	 * So we must only enable one VF when testing by sriov_numvfs of sysfs.
+	 */
+	*base = 64;
+	*number = 4096 - 64;
+
+	return 0;
+}
+
 /* v1 qm hw ops */
 static struct hisi_acc_qm_hw_ops qm_hw_ops_v1 = {
 	.vft_config = _vft_common_config,
 	.aeq_config = NULL,
-	.get_vft_info = NULL,
+	.get_vft_info = get_vft_info_v1,
 };
 
 /* v2 qm hw ops */
@@ -536,6 +566,7 @@ static int aeq_config_v2(struct qm_info *qm)
 
 static int get_vft_info_v2(struct qm_info *qm, u32 *base, u32 *number)
 {
+	/* read base and number from mailbox */
 	return 0;
 }
 
@@ -954,7 +985,7 @@ int hisi_qm_start(struct qm_info *qm)
 	int ret;
 
 	if (qm->pdev->is_physfn)
-		qm->ops->vft_config(qm, qm->qp_base, qm->qp_num);
+		qm->ops->vft_config(qm, qm->qp_base, qm->qp_num, pdev->devfn);
 	else {
 		/* get queue base and number, ES did not support to get this
 		 * from mailbox. so fix me...
@@ -1069,6 +1100,12 @@ int hisi_qm_mem_start(struct qm_info *qm)
 			    val, val & BIT(0), 10, 1000);
 }
 EXPORT_SYMBOL_GPL(hisi_qm_mem_start);
+
+int hisi_qm_vf_add_qp(struct qm_info *qm, u16 base, u32 number, u32 devfn)
+{
+	return qm->ops->vft_config(qm, base, number, devfn);
+}
+EXPORT_SYMBOL_GPL(hisi_qm_vf_add_qp);
 
 MODULE_LICENSE("GPL v2");
 MODULE_AUTHOR("Zhou Wang <wangzhou1@hisilicon.com>");

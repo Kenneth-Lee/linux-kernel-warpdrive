@@ -12,6 +12,9 @@
 #include <linux/vfio_spimdev.h>
 #endif
 
+#define QM_HW_V1			0x1
+#define QM_HW_V2			0x2
+
 #define QM_CQE_SIZE			16
 #define QM_Q_DEPTH			1024
 
@@ -115,6 +118,8 @@ extern void hisi_qm_uninit(struct qm_info *qm);
 extern int hisi_qm_start(struct qm_info *qm);
 extern void hisi_qm_stop(struct qm_info *qm);
 extern int hisi_qm_mem_start(struct qm_info *qm);
+extern int hisi_qm_vf_add_qp(struct qm_info *qm, u16 base, u32 number,
+			     u32 devfn);
 extern struct hisi_qp *hisi_qm_create_qp(struct qm_info *qm, u8 alg_type);
 extern int hisi_qm_start_qp(struct hisi_qp *qp, unsigned long arg);
 extern void hisi_qm_release_qp(struct hisi_qp *qp);

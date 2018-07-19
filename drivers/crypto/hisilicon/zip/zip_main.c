@@ -26,6 +26,10 @@
 #define HZIP_DATA_WUSER_32_63		0x301134
 #define HZIP_BD_WUSER_32_63		0x301140
 
+static unsigned int pf_q_num = HZIP_PF_DEF_Q_NUM;
+module_param(pf_q_num, uint, S_IRUSR);
+MODULE_PARM_DESC(pf_q_num, "Number of queues in PF");
+
 LIST_HEAD(hisi_zip_list);
 DEFINE_MUTEX(hisi_zip_list_lock);
 
@@ -128,16 +132,23 @@ static int hisi_zip_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 	struct qm_info *qm;
 	int ret;
 	u32 val;
+	u8 rev_id;
 
 	hisi_zip = devm_kzalloc(&pdev->dev, sizeof(*hisi_zip), GFP_KERNEL);
 	if (!hisi_zip)
 		return -ENOMEM;
 	hisi_zip_add_to_list(hisi_zip);
+	pci_set_drvdata(pdev, hisi_zip);
 
 	qm = &hisi_zip->qm;
-
 	qm->pdev = pdev;
-	qm->ver = 1; /* fixme: should be set as per the hardware version */
+
+	pci_read_config_byte(pdev, PCI_REVISION_ID, &rev_id);
+	if (rev_id == 0x20)
+		qm->ver = QM_HW_V1;
+	else if (rev_id == 0x21)
+		qm->ver = QM_HW_V2;
+
 	qm->sqe_size = HZIP_SQE_SIZE;
 	ret = hisi_qm_init(hisi_zip_name, qm);
 	if (ret)
@@ -145,7 +156,7 @@ static int hisi_zip_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 
 #define ZIP_ADDR(offset) QM_ADDR(qm, offset)
 
-	if (pdev->is_physfn) {
+	if (pdev->is_physfn && pdev->device == 0xa250) {
 		/* fixme:
 		 * 1. should use writel_relax
 		 * 2. should wrap into qm but need a wrap logic
@@ -174,7 +185,7 @@ static int hisi_zip_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 		hisi_zip_set_user_domain_and_cache(hisi_zip);
 
 		qm->qp_base = HZIP_PF_DEF_Q_BASE;
-		qm->qp_num = HZIP_PF_DEF_Q_NUM;
+		qm->qp_num = pf_q_num;
 	}
 
 #ifdef CONFIG_CRYPTO_DEV_HISI_SPIMDEV
@@ -206,9 +217,99 @@ static void hisi_zip_remove(struct pci_dev *pdev)
 	kfree(hisi_zip);
 }
 
+/* now we only support equal assignment */
+static int hisi_zip_vf_q_assign(struct hisi_zip *hisi_zip, int num_vfs)
+{
+	struct qm_info *qm = &hisi_zip->qm;
+	u32 pf_qp_num = qm->qp_num;
+	u32 vf_qp_base = pf_qp_num;
+	u32 vfs_qp_num, qp_num, i;
+	int ret;
+
+	vfs_qp_num = ((qm->ver == QM_HW_V1) ? HZIP_QUEUE_NUM_V1 :
+		      HZIP_QUEUE_NUM_V2) - pf_qp_num;
+	qp_num = vfs_qp_num / num_vfs;
+
+	for (i = 1; i <= num_vfs; i++) {
+		if (i == num_vfs)
+			qp_num += vfs_qp_num % num_vfs;
+		ret = hisi_qm_vf_add_qp(qm, vf_qp_base, qp_num, i);
+		if (ret)
+			/* fix me: clear vft here is meaningless, we should reset controller */
+			return ret;
+		vf_qp_base += qp_num;
+	}
+
+	return 0;
+}
+
+static int hisi_zip_pci_sriov_enable(struct pci_dev *pdev, int max_vfs)
+{
+#ifdef CONFIG_PCI_IOV
+	struct hisi_zip *hisi_zip = (struct hisi_zip *)pci_get_drvdata(pdev);
+	int pre_existing_vfs, num_vfs, ret;
+
+	pre_existing_vfs = pci_num_vf(pdev);
+
+	if (pre_existing_vfs) {
+		dev_err(&pdev->dev, "Can't enable VF. Please disable pre-enabled VFs!\n");
+		return 0;
+	} else {
+		num_vfs = min_t(int, max_vfs, HZIP_VF_NUM);
+
+		ret = hisi_zip_vf_q_assign(hisi_zip, num_vfs);
+		if (ret) {
+			dev_err(&pdev->dev, "Can't assign queues for VF!\n");
+			return ret;
+		}
+	}
+
+	ret = pci_enable_sriov(pdev, num_vfs);
+	if (ret) {
+		dev_err(&pdev->dev, "Can't enable VF!\n");
+		return ret;
+	}
+
+	return num_vfs;
+#else
+	return 0;
+#endif
+}
+
+static void hisi_zip_clear_vft_config(struct hisi_zip *hisi_zip)
+{
+	struct qm_info *qm = &hisi_zip->qm;
+	u32 num_vfs = pci_num_vf(qm->pdev);
+	u32 i;
+
+	for (i = 1; i <= num_vfs; i++)
+		hisi_qm_vf_add_qp(qm, 0, 0, i);
+}
+
+static int hisi_zip_pci_sriov_disable(struct pci_dev *pdev)
+{
+	struct hisi_zip *hisi_zip = (struct hisi_zip *)pci_get_drvdata(pdev);
+
+	if (pci_num_vf(pdev) == 0)
+		return 0;
+
+	if (pci_vfs_assigned(pdev)) {
+		dev_err(&pdev->dev, "Can't disable VFs while VFs are assigned!\n");
+		return -EPERM;
+	}
+
+	pci_disable_sriov(pdev);
+
+	hisi_zip_clear_vft_config(hisi_zip);
+
+	return 0;
+ }
 static int hisi_zip_pci_sriov_configure(struct pci_dev *pdev, int num_vfs)
 {
-	/* todo: set queue number for VFs */
+	if (num_vfs == 0)
+		return hisi_zip_pci_sriov_disable(pdev);
+	else
+		return hisi_zip_pci_sriov_enable(pdev, num_vfs);
 
 	return 0;
 }
