@@ -192,6 +192,7 @@ static int vfio_spimdev_mdev_create(struct kobject *kobj,
 	struct mdev_device *mdev)
 {
 	struct device *dev = mdev_dev(mdev);
+	struct device *pdev = mdev_parent_dev(mdev);
 	struct spimdev_mdev_state *mdev_state;
 	struct vfio_spimdev *spimdev = mdev_spimdev(mdev);
 
@@ -204,22 +205,24 @@ static int vfio_spimdev_mdev_create(struct kobject *kobj,
 		return -ENOMEM;
 	mdev_set_drvdata(mdev, mdev_state);
 	mdev_state->spimdev = spimdev;
-	dev->iommu_fwspec = mdev_parent_dev(mdev)->iommu_fwspec;
-	pr_info("Create Mdev: %s\n", dev_name(dev));
-
+	dev->iommu_fwspec = pdev->iommu_fwspec;
+	get_device(pdev);
 	__module_get(spimdev->owner);
+	pr_info("Create Mdev: %s\n", dev_name(dev));
 
 	return 0;
 }
 
 static int vfio_spimdev_mdev_remove(struct mdev_device *mdev)
 {
-	struct vfio_spimdev *spimdev = mdev_spimdev(mdev);
 	struct device *dev = mdev_dev(mdev);
+	struct device *pdev = mdev_parent_dev(mdev);
+	struct vfio_spimdev *spimdev = mdev_spimdev(mdev);
 
+	put_device(pdev);
+	module_put(spimdev->owner);
 	dev->iommu_fwspec = NULL;
 	mdev_set_drvdata(mdev, NULL);
-	module_put(spimdev->owner);
 
 	return 0;
 }
