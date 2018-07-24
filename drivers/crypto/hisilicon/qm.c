@@ -382,7 +382,8 @@ static irqreturn_t _qm_irq_thread(int irq, void *data)
 				while (CQE_PHASE(cqe) == CQC_PHASE(QM_CQC(qp))) {
 					dma_rmb();
 					qp->req_cb(qp, QP_SQE_ADDR(qp) +
-						     CQE_SQ_HEAD_INDEX(cqe));
+						   qm->sqe_size *
+						   CQE_SQ_HEAD_INDEX(cqe));
 					_cq_head_update(qp);
 					cqe = QP_CQE(qp) + qp->qp_status.cq_head;
 				}
