@@ -2851,8 +2851,6 @@ static int arm_smmu_add_device(struct device *dev)
 	}
 
 	master->ssid_bits = min(smmu->ssid_bits, fwspec->num_pasid_bits);
-	if (!strncmp(dev_name(dev), "0000:75:00.0", 16))
-		fwspec->can_stall = true;
 
 	if (fwspec->can_stall && smmu->features & ARM_SMMU_FEAT_STALLS) {
 		master->can_fault = true;

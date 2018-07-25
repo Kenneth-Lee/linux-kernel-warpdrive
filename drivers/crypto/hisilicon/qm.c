@@ -635,12 +635,6 @@ int hisi_qm_start_qp(struct hisi_qp *qp, unsigned long arg)
 	qp->cqc.dma = qm->cqc.dma + qp_index * sizeof(struct cqc);
 	cqc = QM_CQC(qp);
 
-	QM_SQC(qp)->pasid = pasid;
-	ret = _hacc_mb(qp->qm, MAILBOX_CMD_SQC, qp->sqc.dma, qp->queue_id, 0,
-		       0);
-	if (ret)
-		return ret;
-
 	/* allocate sq and cq */
 	ret = _init_q_buffer(dev,
 		qm->sqe_size * QM_Q_DEPTH + sizeof(struct cqe) * QM_Q_DEPTH,
@@ -654,6 +648,7 @@ int hisi_qm_start_qp(struct hisi_qp *qp, unsigned long arg)
 	if (qm->sqe_size == 128)
 		order = 7;
 	INIT_QC(sqc, qp->scqe.dma);
+	sqc->pasid = pasid;
 	sqc->dw3 = (0 << SQ_HOP_NUM_SHIFT)      |
 		   (0 << SQ_PAGE_SIZE_SHIFT)    |
 		   (0 << SQ_BUF_SIZE_SHIFT)     |

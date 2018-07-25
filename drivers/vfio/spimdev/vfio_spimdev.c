@@ -379,7 +379,7 @@ static long vfio_spimdev_mdev_ioctl(struct mdev_device *mdev, unsigned int cmd,
 	spimdev = mdev_state->spimdev;
 	if (!spimdev)
 		return -ENODEV;
-pr_info("%s, arg = %d\n", __func__, arg);
+
 	if (cmd == VFIO_SPIMDEV_CMD_GET_Q)
 		return vfio_spimdev_mdev_get_queue(mdev, spimdev, arg);
 
