@@ -22,7 +22,7 @@ How does it work
 *WarpDrive* takes the Hardware Accelerator as a heterogeneous processor which
 can share some load for the CPU:
 
-.. image:: _static/wd.svg
+.. image:: wd.svg
         :alt: This is a .svg image, if your browser cannot show it,
                 try to download and view it locally
 
@@ -56,7 +56,7 @@ Architecture
 The full *WarpDrive* architecture is represented in the following class
 diagram:
 
-.. image:: _static/wd-arch.svg
+.. image:: wd-arch.svg
         :alt: This is a .svg image, if your browser cannot show it,
                 try to download and view it locally
 
