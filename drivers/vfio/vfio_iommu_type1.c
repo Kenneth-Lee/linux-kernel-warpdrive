@@ -1415,12 +1415,14 @@ static int vfio_iommu_type1_attach_group(void *iommu_data,
 			symbol_put(mdev_bus_type);
 			pgroup = NULL;
 
-			/* Check if it is spimdev, or go default logic */
 			ret = iommu_group_for_each_dev(iommu_group, &pgroup,
 						       vfio_spimdev_type);
 			if (ret < 0)
 				goto out_free;
 			else if (ret > 0) {
+				/* If the dev is spimdev, reuse its parent
+				 * device's domain
+				 */
 				domain->domain =
 					iommu_group_default_domain(pgroup);
 				group->parent_group = pgroup;
@@ -1621,10 +1623,10 @@ static void vfio_iommu_type1_detach_group(void *iommu_data,
 			continue;
 		ret = iommu_group_for_each_dev(iommu_group, NULL,
 					       vfio_spimdev_type);
-
-		/* if it is spimdev, we don't need to do detach any more */
 		if (ret < 0)
 			goto detach_group_done;
+
+		/* spimdev use its parent's domain, no detach */
 		if (!ret)
 			iommu_detach_group(domain->domain, iommu_group);
 
