@@ -750,6 +750,7 @@ static int hisi_qm_get_queue(struct vfio_spimdev *spimdev, unsigned long arg,
 		ret = -ENOMEM;
 		goto err_with_qp;
 	}
+
 	wd_q->priv = qp;
 	wd_q->spimdev = spimdev;
 	wd_q->qid = (u16)ret;
