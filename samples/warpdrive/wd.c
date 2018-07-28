@@ -43,7 +43,7 @@ static int _wd_bind_process(struct wd_queue *q)
 	ret = ioctl(q->container, VFIO_IOMMU_BIND, &wd_bind);
 	if (ret)
 		return ret;
-	q->pasid = wd_bind.data.pasid;
+	q->capa.pasid = wd_bind.data.pasid;
 	return ret;
 }
 
@@ -61,7 +61,7 @@ static int _wd_unbind_process(struct wd_queue *q)
 		flags = VFIO_IOMMU_BIND_NOPF;
 
 	wd_bind.bind.flags = VFIO_IOMMU_BIND_PROCESS;
-	wd_bind.data.pasid = q->pasid;
+	wd_bind.data.pasid = q->capa.pasid;
 	wd_bind.data.flags = flags;
 	wd_bind.bind.argsz = sizeof(wd_bind);
 
@@ -161,12 +161,11 @@ int wd_request_queue(struct wd_queue *q)
 
 		}
 	}
-	ret = q->fd = ioctl(q->mdev, VFIO_SPIMDEV_CMD_GET_Q, (unsigned long)q->pasid);
+	ret = q->fd = ioctl(q->mdev, VFIO_SPIMDEV_CMD_GET_Q, &q->capa);
 	if (ret < 0) {
 		WD_ERR("get queue fail,ret=%d\n", errno);
 		goto err_with_mdev;
 	}
-
 	ret = drv_open(q);
 	if (ret)
 		goto err_with_queue;
@@ -189,8 +188,8 @@ void wd_release_queue(struct wd_queue *q)
 	drv_close(q);
 	close(q->fd);
 	if (!(q->dma_flag & (VFIO_SPIMDEV_DMA_PHY | VFIO_SPIMDEV_DMA_SINGLE_PROC_MAP))) {
-		if (q->pasid <= 0) {
-			WD_ERR("Wd queue pasid ! pasid=%d\n", q->pasid);
+		if (q->capa.pasid <= 0) {
+			WD_ERR("Wd queue pasid ! pasid=%d\n", q->capa.pasid);
 			return;
 		}
 		if (_wd_unbind_process(q)) {
@@ -264,8 +263,8 @@ static int _wd_mem_share_type1(struct wd_queue *q, const void *addr,
 
 #ifdef HAVE_SVA
 	else if ((q->dma_flag & VFIO_SPIMDEV_DMA_MULTI_PROC_MAP) &&
-		 (q->pasid > 0))
-		dma_map.pasid = q->pasid;
+		 (q->capa.pasid > 0))
+		dma_map.pasid = q->capa.pasid;
 #endif
 	else if ((q->dma_flag & VFIO_SPIMDEV_DMA_SINGLE_PROC_MAP))
 		; //todo
@@ -295,8 +294,9 @@ static void _wd_mem_unshare_type1(struct wd_queue *q, const void *addr,
 
 #ifdef HAVE_SVA
 	dma_unmap.iova = (__u64)addr;
-	if ((q->dma_flag & VFIO_SPIMDEV_DMA_MULTI_PROC_MAP) && (q->pasid > 0))
-		dma_unmap.pasid = q->pasid;
+	if ((q->dma_flag & VFIO_SPIMDEV_DMA_MULTI_PROC_MAP) &&
+		(q->capa.pasid > 0))
+		dma_unmap.pasid = q->capa.pasid;
 	else
 		return;
 	dma_unmap.flags = 0;

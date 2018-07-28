@@ -61,5 +61,5 @@ enum vfio_spimdev_dma_flags {
 
 
 #define VFIO_SPIMDEV_CMD_WAIT	_IOW('W', 1, unsigned long)
-#define VFIO_SPIMDEV_CMD_GET_Q	_IOW('W', 2, unsigned long)
+#define VFIO_SPIMDEV_CMD_GET_Q	_IOWR('W', 2, struct qp_capa*)
 #endif

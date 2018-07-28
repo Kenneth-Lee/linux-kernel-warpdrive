@@ -122,17 +122,22 @@ enum wd_addr_flags {
 }while(0)
 #define free_obj(objp) if (objp)free(objp)
 
+struct wd_capa {
+	int index;
+	int pasid;
+};
+
 struct wd_queue {
 	const char *mdev_name;
 	char hw_type[PATH_STR_SIZE];
 	int hw_type_id;
 	int dma_flag;
+	struct wd_capa capa;
 	void *priv; /* private data used by the drv layer */
 	int container;
 	int group;
 	int mdev;
 	int fd;
-	int pasid;
 	int iommu_type;
 	char *vfio_group_path;
 	char *iommu_ext_path;

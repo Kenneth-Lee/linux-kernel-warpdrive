@@ -63,7 +63,7 @@ int hizip_deflate(FILE *source, FILE *dest,  int type)
 	ret = wd_request_queue(&q);
 	SYS_ERR_COND(ret, "wd_request_queue");
 
-	fprintf(stderr, "pasid=%d, dma_flag=%d\n", q.pasid, q.dma_flag);
+	fprintf(stderr, "pasid=%d, dma_flag=%d\n",  q.capa.pasid, q.dma_flag);
 	fd = fileno(source);
 	struct stat s;
 

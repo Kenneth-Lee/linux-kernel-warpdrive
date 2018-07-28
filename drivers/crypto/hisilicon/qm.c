@@ -680,7 +680,7 @@ int hisi_qm_start_qp(struct hisi_qp *qp, unsigned long arg)
 	qm->qp_array[qp_index] = qp;
 	write_unlock(&qm->qps_lock);
 
-	return 0;
+	return qp_index;
 }
 EXPORT_SYMBOL_GPL(hisi_qm_start_qp);
 
@@ -759,7 +759,7 @@ static void _qp_event_notifier(struct hisi_qp *qp)
 	vfio_spimdev_wake_up(qp->spimdev_q);
 }
 
-static int hisi_qm_get_queue(struct vfio_spimdev *spimdev, unsigned long arg,
+static int hisi_qm_get_queue(struct vfio_spimdev *spimdev, int arg,
 			  struct vfio_spimdev_queue **q)
 {
 	struct qm_info *qm = spimdev->priv;
@@ -785,10 +785,10 @@ static int hisi_qm_get_queue(struct vfio_spimdev *spimdev, unsigned long arg,
 	qp->event_cb = _qp_event_notifier;
 
 	ret = hisi_qm_start_qp(qp, arg);
-	if (ret)
+	if (ret < 0)
 		goto err_with_wd_q;
 
-	return 0;
+	return ret;
 
 err_with_wd_q:
 	kfree(wd_q);

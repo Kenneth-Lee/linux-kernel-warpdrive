@@ -133,6 +133,7 @@ int hisi_qm_set_queue_dio(struct wd_queue *q)
 	info->cqc_phase = 1;
 
 	info->is_sq_full = 0;
+	info->sqn = q->capa.index;
 
 	return 0;
 

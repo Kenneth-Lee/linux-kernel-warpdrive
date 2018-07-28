@@ -44,7 +44,7 @@ struct vfio_spimdev;
  * @ioctl:   ioctl for user space users of the queue
  */
 struct vfio_spimdev_ops {
-	int (*get_queue)(struct vfio_spimdev *spimdev, unsigned long arg,
+	int (*get_queue)(struct vfio_spimdev *spimdev, int arg,
 		struct vfio_spimdev_queue **q);
 	int (*put_queue)(struct vfio_spimdev_queue *q);
 	int (*is_q_updated)(struct vfio_spimdev_queue *q);
@@ -55,6 +55,11 @@ struct vfio_spimdev_ops {
 	long (*ioctl)(struct vfio_spimdev_queue *q, unsigned int cmd,
 			unsigned long arg);
 	int (*get_available_instances)(struct vfio_spimdev *spimde);
+};
+
+struct qp_capa {
+	int index;
+	int pasid;
 };
 
 /**
@@ -82,7 +87,7 @@ struct vfio_spimdev_queue {
 	int status;
 	int fd;
 	int container;
-	int pasid;
+	struct qp_capa q_capa;
 };
 
 /**

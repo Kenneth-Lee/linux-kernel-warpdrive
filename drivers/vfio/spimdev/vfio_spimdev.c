@@ -325,20 +325,29 @@ static long vfio_spimdev_mdev_get_queue(struct mdev_device *mdev,
 	struct vfio_spimdev_queue *q;
 	int ret;
 	int fd;
+	struct qp_capa q_capa;
 	int pasid = arg;
 	if (!spimdev->ops->get_queue)
 		return -EINVAL;
 
+	if (copy_from_user(&q_capa, (unsigned long long *)arg,
+		sizeof(unsigned long long)))
+		return -EFAULT;
+
 #ifdef CONFIG_IOMMU_SVA
-	if (!_is_valid_pasid(pasid))
+	if (!_is_valid_pasid(q_capa.pasid))
 		return -EINVAL;
 #endif
 
-	ret = spimdev->ops->get_queue(spimdev, arg, &q);
+	ret = spimdev->ops->get_queue(spimdev, q_capa.pasid, &q);
 	if (ret < 0) {
 		dev_err(spimdev->dev, "get_queue failed\n");
 		return -ENODEV;
 	}
+	q_capa.index = ret;
+	if (copy_to_user((struct qp_capa *)arg, &q_capa,
+		sizeof(struct qp_capa)))
+		return -EFAULT;
 
 	fd = anon_inode_getfd("spimdev_q", &spimdev_q_file_ops,
 			q, O_CLOEXEC | O_RDWR);
