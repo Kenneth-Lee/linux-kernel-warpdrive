@@ -1339,7 +1339,7 @@ static int vfio_spimdev_type(struct device *dev, void *data)
 	int ret = 1;
 
 	/* vfio_spimdev module is not configurated */
-	spimdev_mdev = symbol_get(is_vfio_spimdev_mdev);
+	spimdev_mdev = symbol_get(vfio_spimdev_is_spimdev);
 	if (!spimdev_mdev)
 		return 0;
 
@@ -1361,7 +1361,7 @@ static int vfio_spimdev_type(struct device *dev, void *data)
 	iommu_group_put(pgroup);
 
 get_exit:
-	symbol_put(is_vfio_spimdev_mdev);
+	symbol_put(vfio_spimdev_is_spimdev);
 
 	return ret;
 }
@@ -1415,7 +1415,7 @@ static int vfio_iommu_type1_attach_group(void *iommu_data,
 			symbol_put(mdev_bus_type);
 			pgroup = NULL;
 
-			/* Check if it is spimdev (wrapdrive device), or go default logic */
+			/* Check if it is spimdev, or go default logic */
 			ret = iommu_group_for_each_dev(iommu_group, &pgroup,
 						       vfio_spimdev_type);
 			if (ret < 0)

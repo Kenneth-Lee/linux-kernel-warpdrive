@@ -1,36 +1,24 @@
 // SPDX-License-Identifier: GPL-2.0+
-#include <linux/module.h>
-#include <linux/of.h>
-#include <linux/semaphore.h>
-#include <linux/mutex.h>
-#include <linux/list.h>
-#include <linux/atomic.h>
-#include <linux/io.h>
-#include <linux/delay.h>
-#include <linux/slab.h>
-#include <linux/mm.h>
-#include <linux/iommu.h>
-#include <linux/mdev.h>
-#include <linux/wait.h>
-#include <linux/sched.h>
-#include <linux/sched/mm.h>
-#include <linux/vfio_spimdev.h>
-#include <linux/file.h>
 #include <linux/anon_inodes.h>
+#include <linux/idr.h>
+#include <linux/module.h>
+#include <linux/poll.h>
+#include <linux/vfio_spimdev.h>
 
 struct spimdev_mdev_state {
 	struct vfio_spimdev *spimdev;
 };
 
 static struct class *spimdev_class;
+static DEFINE_IDR(spimdev_idr);
 
-static int __dev_exist(struct device *dev, void *data)
+static int vfio_spimdev_dev_exist(struct device *dev, void *data)
 {
 	return !strcmp(dev_name(dev), dev_name((struct device *)data));
 }
 
 #ifdef CONFIG_IOMMU_SVA
-static bool _is_valid_pasid(int pasid)
+static bool vfio_spimdev_is_valid_pasid(int pasid)
 {
 	struct mm_struct *mm;
 
@@ -45,7 +33,7 @@ static bool _is_valid_pasid(int pasid)
 #endif
 
 /* Check if the device is a mediated device belongs to vfio_spimdev */
-int is_vfio_spimdev_mdev(struct device *dev)
+int vfio_spimdev_is_spimdev(struct device *dev)
 {
 	struct mdev_device *mdev;
 	struct device *pdev;
@@ -58,9 +46,10 @@ int is_vfio_spimdev_mdev(struct device *dev)
 	if (!pdev)
 		return 0;
 
-	return class_for_each_device(spimdev_class, NULL, pdev, __dev_exist);
+	return class_for_each_device(spimdev_class, NULL, pdev,
+			vfio_spimdev_dev_exist);
 }
-EXPORT_SYMBOL(is_vfio_spimdev_mdev);
+EXPORT_SYMBOL_GPL(vfio_spimdev_is_spimdev);
 
 struct vfio_spimdev *vfio_spimdev_pdev_spimdev(struct device *dev)
 {
@@ -70,37 +59,13 @@ struct vfio_spimdev *vfio_spimdev_pdev_spimdev(struct device *dev)
 		return ERR_PTR(-EINVAL);
 
 	class_dev = class_find_device(spimdev_class, NULL, dev,
-		       (int(*)(struct device *, const void *))__dev_exist);
+		(int(*)(struct device *, const void *))vfio_spimdev_dev_exist);
 	if (!class_dev)
 		return ERR_PTR(-ENODEV);
 
 	return container_of(class_dev, struct vfio_spimdev, cls_dev);
 }
-EXPORT_SYMBOL(vfio_spimdev_pdev_spimdev);
-
-int vfio_spimdev_get(struct device *dev)
-{
-	struct vfio_spimdev *spimdev;
-
-	spimdev = vfio_spimdev_pdev_spimdev(dev);
-	if (IS_ERR(spimdev))
-		return PTR_ERR(spimdev);
-
-	return atomic_inc_return(&spimdev->ref);
-}
-EXPORT_SYMBOL(vfio_spimdev_get);
-
-int vfio_spimdev_put(struct device *dev)
-{
-	struct vfio_spimdev *spimdev;
-
-	spimdev = vfio_spimdev_pdev_spimdev(dev);
-	if (IS_ERR(spimdev))
-		return PTR_ERR(spimdev);
-
-	return atomic_dec_return(&spimdev->ref);
-}
-EXPORT_SYMBOL(vfio_spimdev_put);
+EXPORT_SYMBOL_GPL(vfio_spimdev_pdev_spimdev);
 
 struct vfio_spimdev *mdev_spimdev(struct mdev_device *mdev)
 {
@@ -108,7 +73,7 @@ struct vfio_spimdev *mdev_spimdev(struct mdev_device *mdev)
 
 	return vfio_spimdev_pdev_spimdev(pdev);
 }
-EXPORT_SYMBOL(mdev_spimdev);
+EXPORT_SYMBOL_GPL(mdev_spimdev);
 
 static ssize_t iommu_type_show(struct device *dev,
 			       struct device_attribute *attr, char *buf)
@@ -152,13 +117,9 @@ const struct attribute_group *vfio_spimdev_groups[] = {
 };
 
 /* default attributes for mdev->supported_type_groups, used by registerer*/
-#define DEVICE_ATTR_RO_EXPORT(name)	\
-		DEVICE_ATTR_RO(name);	\
-		EXPORT_SYMBOL(dev_attr_##name);
-
-#define MDEV_TYPE_ATTR_RO_EXPORT(name)	\
-		MDEV_TYPE_ATTR_RO(name);	\
-		EXPORT_SYMBOL(mdev_type_attr_##name);
+#define MDEV_TYPE_ATTR_RO_EXPORT(name) \
+		MDEV_TYPE_ATTR_RO(name); \
+		EXPORT_SYMBOL_GPL(mdev_type_attr_##name);
 
 #define DEF_SIMPLE_SPIMDEV_ATTR(_name, spimdev_member, format) \
 static ssize_t _name##_show(struct kobject *kobj, struct device *dev, \
@@ -187,7 +148,6 @@ available_instances_show(struct kobject *kobj, struct device *dev, char *buf)
 }
 MDEV_TYPE_ATTR_RO_EXPORT(available_instances);
 
-
 static int vfio_spimdev_mdev_create(struct kobject *kobj,
 	struct mdev_device *mdev)
 {
@@ -208,7 +168,6 @@ static int vfio_spimdev_mdev_create(struct kobject *kobj,
 	dev->iommu_fwspec = pdev->iommu_fwspec;
 	get_device(pdev);
 	__module_get(spimdev->owner);
-	pr_info("Create Mdev: %s\n", dev_name(dev));
 
 	return 0;
 }
@@ -232,7 +191,7 @@ void vfio_spimdev_wake_up(struct vfio_spimdev_queue *q)
 {
 	wake_up(&q->wait);
 }
-EXPORT_SYMBOL(vfio_spimdev_wake_up);
+EXPORT_SYMBOL_GPL(vfio_spimdev_wake_up);
 
 static int vfio_spimdev_q_file_open(struct inode *inode, struct file *file)
 {
@@ -263,34 +222,11 @@ static long vfio_spimdev_q_file_ioctl(struct file *file, unsigned int cmd,
 	struct vfio_spimdev_queue *q =
 		(struct vfio_spimdev_queue *)file->private_data;
 	struct vfio_spimdev *spimdev = q->spimdev;
-	int ret;
-
-	if (cmd == VFIO_SPIMDEV_CMD_WAIT) {
-
-		u16 timeout = msecs_to_jiffies(arg & 0xffff);
-
-		if (spimdev->ops->mask_notify)
-			spimdev->ops->mask_notify(q,
-						  _VFIO_SPIMDEV_EVENT_NOTIFY);
-
-		ret = timeout ?
-			wait_event_interruptible_timeout(q->wait,
-				spimdev->ops->is_q_updated(q), timeout) :
-			wait_event_interruptible(q->wait,
-				spimdev->ops->is_q_updated(q));
-
-		if (spimdev->ops->mask_notify)
-			spimdev->ops->mask_notify(q,
-						  _VFIO_SPIMDEV_EVENT_DISABLE);
-
-		return ret;
-	}
 
 	if (spimdev->ops->ioctl)
 		return spimdev->ops->ioctl(q, cmd, arg);
 
-	dev_err(spimdev->dev,
-		"%s, ioctl cmd (%d) is not supported!\n", __func__, cmd);
+	dev_err(spimdev->dev, "ioctl cmd (%d) is not supported!\n", cmd);
 
 	return -EINVAL;
 }
@@ -305,17 +241,29 @@ static int vfio_spimdev_q_file_mmap(struct file *file,
 	if (spimdev->ops->mmap)
 		return spimdev->ops->mmap(q, vma);
 
-	dev_err(spimdev->dev, "\nno driver mmap!");
-
+	dev_err(spimdev->dev, "no driver mmap!\n");
 	return -EINVAL;
 }
 
+static __poll_t vfio_spimdev_q_file_poll(struct file *file, poll_table *wait)
+{
+	struct vfio_spimdev_queue *q =
+		(struct vfio_spimdev_queue *)file->private_data;
+	struct vfio_spimdev *spimdev = q->spimdev;
+
+	poll_wait(file, &q->wait, wait);
+	if (spimdev->ops->is_q_updated(q))
+		return EPOLLIN | EPOLLRDNORM;
+
+	return 0;
+}
 
 static const struct file_operations spimdev_q_file_ops = {
 	.owner = THIS_MODULE,
 	.open = vfio_spimdev_q_file_open,
 	.unlocked_ioctl = vfio_spimdev_q_file_ioctl,
 	.release = vfio_spimdev_q_file_release,
+	.poll = vfio_spimdev_q_file_poll,
 	.mmap = vfio_spimdev_q_file_mmap,
 };
 
@@ -324,18 +272,16 @@ static long vfio_spimdev_mdev_get_queue(struct mdev_device *mdev,
 {
 	struct vfio_spimdev_queue *q;
 	int ret;
-	int fd;
 
 #ifdef CONFIG_IOMMU_SVA
 	int pasid = arg;
 
-	if (!_is_valid_pasid(pasid))
+	if (!vfio_spimdev_is_valid_pasid(pasid))
 		return -EINVAL;
 #endif
 
 	if (!spimdev->ops->get_queue)
 		return -EINVAL;
-
 
 	ret = spimdev->ops->get_queue(spimdev, arg, &q);
 	if (ret < 0) {
@@ -343,23 +289,21 @@ static long vfio_spimdev_mdev_get_queue(struct mdev_device *mdev,
 		return -ENODEV;
 	}
 
-	fd = anon_inode_getfd("spimdev_q", &spimdev_q_file_ops,
+	ret = anon_inode_getfd("spimdev_q", &spimdev_q_file_ops,
 			q, O_CLOEXEC | O_RDWR);
-	if (fd < 0) {
-		dev_err(spimdev->dev, "getfd fail %d\n", fd);
-		ret = fd;
+	if (ret < 0) {
+		dev_err(spimdev->dev, "getfd fail %d\n", ret);
 		goto err_with_queue;
 	}
 
-	q->fd = fd;
+	q->fd = ret;
 	q->spimdev = spimdev;
 	q->mdev = mdev;
 	q->container = arg;
 	init_waitqueue_head(&q->wait);
 	get_device(mdev_dev(mdev));
 
-
-	return fd;
+	return ret;
 
 err_with_queue:
 	spimdev->ops->put_queue(q);
@@ -401,7 +345,6 @@ static int vfio_spimdev_mdev_open(struct mdev_device *mdev) { return 0; }
  */
 int vfio_spimdev_register(struct vfio_spimdev *spimdev)
 {
-	static atomic_t id = ATOMIC_INIT(-1);
 	int ret;
 	const char *drv_name;
 
@@ -414,7 +357,10 @@ int vfio_spimdev_register(struct vfio_spimdev *spimdev)
 		return -EINVAL;
 	}
 
-	spimdev->dev_id = (int)atomic_inc_return(&id);
+	spimdev->dev_id = idr_alloc(&spimdev_idr, spimdev, 0, 0, GFP_KERNEL);
+	if (spimdev->dev_id < 0)
+		return spimdev->dev_id;
+
 	atomic_set(&spimdev->ref, 0);
 	spimdev->cls_dev.parent = spimdev->dev;
 	spimdev->cls_dev.class = spimdev_class;
@@ -426,8 +372,8 @@ int vfio_spimdev_register(struct vfio_spimdev *spimdev)
 
 	spimdev->mdev_fops.owner		= spimdev->owner;
 	spimdev->mdev_fops.dev_attr_groups	= vfio_spimdev_groups;
-	assert(spimdev->mdev_fops.mdev_attr_groups);
-	assert(spimdev->mdev_fops.supported_type_groups);
+	BUG_ON(!spimdev->mdev_fops.mdev_attr_groups);
+	BUG_ON(!spimdev->mdev_fops.supported_type_groups);
 	spimdev->mdev_fops.create		= vfio_spimdev_mdev_create;
 	spimdev->mdev_fops.remove		= vfio_spimdev_mdev_remove;
 	spimdev->mdev_fops.ioctl		= vfio_spimdev_mdev_ioctl;
@@ -440,7 +386,7 @@ int vfio_spimdev_register(struct vfio_spimdev *spimdev)
 
 	return ret;
 }
-EXPORT_SYMBOL(vfio_spimdev_register);
+EXPORT_SYMBOL_GPL(vfio_spimdev_register);
 
 /**
  * vfio_spimdev_unregister - unregisters a spimdev
@@ -454,7 +400,7 @@ void vfio_spimdev_unregister(struct vfio_spimdev *spimdev)
 	mdev_unregister_device(spimdev->dev);
 	device_unregister(&spimdev->cls_dev);
 }
-EXPORT_SYMBOL(vfio_spimdev_unregister);
+EXPORT_SYMBOL_GPL(vfio_spimdev_unregister);
 
 static int __init vfio_spimdev_init(void)
 {
@@ -465,6 +411,7 @@ static int __init vfio_spimdev_init(void)
 static __exit void vfio_spimdev_exit(void)
 {
 	class_destroy(spimdev_class);
+	idr_destroy(&spimdev_idr);
 }
 
 module_init(vfio_spimdev_init);

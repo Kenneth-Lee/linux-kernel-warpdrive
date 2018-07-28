@@ -6,7 +6,7 @@
 #ifndef _UAPIVFIO_SPIMDEV_H
 #define _UAPIVFIO_SPIMDEV_H
 
-#include <linux/types.h>
+#include <linux/ioctl.h>
 
 #define VFIO_SPIMDEV_CLASS_NAME		"spimdev"
 
@@ -28,13 +28,5 @@
 #define	VFIO_SPIMDEV_DMA_SVM_NO_FAULT		8
 #define	VFIO_SPIMDEV_DMA_PHY			16
 
-/* Input data buffer can be a scatter-gather list */
-#define VFIO_SPIMDEV_CAPA_SGL		1
-
-/* Share whole process space with WD device */
-#define VFIO_SPIMDEV_CAPA_SHARE_ALL		2
-
-
-#define VFIO_SPIMDEV_CMD_WAIT	_IOW('W', 1, unsigned long)
-#define VFIO_SPIMDEV_CMD_GET_Q	_IOW('W', 2, unsigned long)
+#define VFIO_SPIMDEV_CMD_GET_Q	_IO('W', 1)
 #endif
