@@ -236,7 +236,7 @@ static int dummy_get_queue(struct vfio_spimdev *spimdev, unsigned long arg,
 	struct dummy_hw *hw = (struct dummy_hw *)spimdev->priv;
 	struct dummy_hw_queue *devqs = hw->qs;
 
-	assert(devqs);
+	BUG_ON(!devqs);
 
 	mutex_lock(&qsmutex);
 	for (i = 0; i < MAX_QUEUE; i++) {
@@ -372,7 +372,7 @@ static int __init dummy_vfio_spimdev_init(void)
 
 	for (i = 0; i < MAX_DEV; i++) {
 		hws[i].pdev = platform_device_alloc(DUMMY_WD, i);
-		assert(hws[i]->pdev);
+		BUG_ON(!hws[i].pdev);
 		ret = platform_device_add(hws[i].pdev);
 		if (ret)
 			goto dev_reg_fail;
