@@ -1369,7 +1369,7 @@ static int vfio_group_set_container(struct vfio_group *group, int container_fd)
 	int ret = 0;
 
 	if (atomic_read(&group->container_users))
-		return -EINVAL;
+		/*return -EINVAL*/;
 
 	if (group->noiommu && !capable(CAP_SYS_RAWIO))
 		return -EPERM;
@@ -1598,15 +1598,15 @@ static int vfio_group_fops_open(struct inode *inode, struct file *filep)
 	/* Do we need multiple instances of the group open?  Seems not. */
 	opened = atomic_cmpxchg(&group->opened, 0, 1);
 	if (opened) {
-		vfio_group_put(group);
-		return -EBUSY;
+		/*vfio_group_put(group);*/
+		/*return -EBUSY;*/
 	}
 
 	/* Is something still in use from a previous open? */
 	if (group->container) {
-		atomic_dec(&group->opened);
-		vfio_group_put(group);
-		return -EBUSY;
+		/*atomic_dec(&group->opened);*/
+		/*vfio_group_put(group);*/
+		/*return -EBUSY;*/
 	}
 
 	/* Warn if previous user didn't cleanup and re-init to drop them */
