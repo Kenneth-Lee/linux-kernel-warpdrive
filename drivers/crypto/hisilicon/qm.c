@@ -885,12 +885,7 @@ static int _qm_register_spimdev(struct qm_info *qm)
 int hisi_qm_init(const char *dev_name, struct qm_info *qm)
 {
 	int ret;
-	u16 ecam_val16;
 	struct pci_dev *pdev = qm->pdev;
-
-	pci_set_power_state(pdev, PCI_D0);
-	ecam_val16 = PCI_COMMAND_MASTER | PCI_COMMAND_MEMORY;
-	pci_write_config_word(pdev, PCI_COMMAND, ecam_val16);
 
 	ret = pci_enable_device_mem(pdev);
 	if (ret < 0) {
