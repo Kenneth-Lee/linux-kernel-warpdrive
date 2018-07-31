@@ -349,6 +349,8 @@ extern int iommu_domain_get_attr(struct iommu_domain *domain, enum iommu_attr,
 				 void *data);
 extern int iommu_domain_set_attr(struct iommu_domain *domain, enum iommu_attr,
 				 void *data);
+extern struct iommu_domain *iommu_group_share_domain(struct iommu_group *group);
+extern void iommu_group_unshare_domain(struct iommu_group *group);
 
 /* Window handling function prototypes */
 extern int iommu_domain_window_enable(struct iommu_domain *domain, u32 wnd_nr,
