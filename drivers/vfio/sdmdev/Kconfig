@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: GPL-2.0
+config VFIO_SDMDEV
+	tristate "Support for Share Domain MDEV"
+	depends on VFIO_MDEV_DEVICE
+	help
+	  Support for VFIO Share Domain MDEV, which enables the kernel to
+	  support light weight hardware accelerator framework, WarpDrive.
+
+	  To compile this as a module, choose M here: the module will be called
+	  sdmdev.
