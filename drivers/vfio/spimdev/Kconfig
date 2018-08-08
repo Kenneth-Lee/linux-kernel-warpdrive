@@ -3,8 +3,8 @@ config VFIO_SPIMDEV
 	tristate "Support for Share Parent IOMMU MDEV"
 	depends on VFIO_MDEV_DEVICE
 	help
-	  Support for VFIO Share Parent IOMMU MDEV, which enable the kernel to
-	  support for the light weight hardware accelerator framework, WrapDrive.
+	  Support for VFIO Share Parent IOMMU MDEV, which enables the kernel to
+	  support light weight hardware accelerator framework, WarpDrive.
 
 	  To compile this as a module, choose M here: the module will be called
 	  spimdev.
