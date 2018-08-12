@@ -8,7 +8,7 @@ It can be taken as a light weight virtual function, which you can use without
 It can be used as the quick channel for accelerators, network adaptors or
 other hardware in user space. It can make some implementation simpler.  E.g.
 you can reuse most of the *netdev* driver and just share some ring buffer to
-the user space driver for *DPDK* or *ODP*. Or you can combine the RSA
+the user space driver for *DPDK*[4] or *ODP*[5]. Or you can combine the RSA
 accelerator with the *netdev* in the user space as a Web reversed proxy, etc.
 
 The name *WarpDrive* is simply a cool and general name meaning the framework
@@ -19,7 +19,7 @@ namely "Share Parent IOMMU Mediated Device".
 How does it work
 ================
 
-*WarpDrive* takes the Hardware Accelerator as a heterogeneous processor which
+*WarpDrive* takes the hardware accelerator as a heterogeneous processor which
 can share some load for the CPU:
 
 .. image:: wd.svg
@@ -89,8 +89,8 @@ We adopt a polling style interface in the user space: ::
 the ..._sync() interface is a wrapper to the non sync version. They wait on the
 device until the queue become available.
 
-Memory can be done by VFIO DMA API. Or the following helper function can be
-adopted: ::
+Memory sharing can be done by VFIO DMA API. Or the following helper function
+can be adopted: ::
 
         int wd_mem_share(struct wd_queue *q, const void *addr,
                          size_t size, int flags);
@@ -149,5 +149,7 @@ References
        https://lists.gt.net/linux/kernel/1931993) again to solve this problem.
 .. [2] https://patchwork.kernel.org/patch/10394851/
 .. [3] https://zhuanlan.zhihu.com/p/35489035
+.. [4] https://www.dpdk.org/about/
+.. [5] https://www.opendataplane.org/
 
 .. vim: tw=78
