@@ -3,6 +3,7 @@
 #define __ACCE4U_H
 
 #include <linux/device.h>
+#include <linux/list.h>
 #include <linux/iommu.h>
 #include <uapi/linux/acce4u.h>
 
@@ -20,11 +21,13 @@ struct acce4u;
  * @reset_queue: reset the queue
  * @ioctl:   ioctl for user space users of the queue
  * @get_available_instances: get numbers of the queue remained
+ * @stop_queue: make the queue stop work before put_queue
  */
 struct acce4u_ops {
 	int (*get_queue)(struct acce4u *acce4u, unsigned long arg,
 		struct acce4u_queue **q);
 	int (*put_queue)(struct acce4u_queue *q);
+	int (*stop_queue)(struct acce4u_queue *q);
 	int (*is_q_updated)(struct acce4u_queue *q);
 	void (*mask_notify)(struct acce4u_queue *q, int event_mask);
 	int (*mmap)(struct acce4u_queue *q, struct vm_area_struct *vma);
@@ -45,6 +48,7 @@ struct acce4u_queue {
 #ifdef CONFIG_IOMMU_SVA
 	int pasid;
 #endif
+	struct list_head share_mem_list;
 };
 
 struct acce4u {

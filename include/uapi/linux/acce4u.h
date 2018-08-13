@@ -6,6 +6,12 @@
 
 #define ACCE4U_CLASS_NAME		"acce4u"
 
-#define ACCE4U_CMD_SHARE_MEM	_IO('A', 1)
-#define ACCE4U_CMD_UNSHARE_MEM	_IO('A', 2)
+struct acce4u_mem_share_arg {
+	__u64 vaddr;
+	__u64 size;
+};
+
+#define ACCE4U_CMD_SHARE_MEM	_IOR('A', 1, struct acce4u_mem_share_arg)
+#define ACCE4U_CMD_UNSHARE_MEM	_IOR('A', 2, struct acce4u_mem_share_arg)
+
 #endif

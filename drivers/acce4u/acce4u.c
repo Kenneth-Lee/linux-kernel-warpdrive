@@ -92,6 +92,145 @@ void acce4u_unregister(struct acce4u *acce4u)
 }
 EXPORT_SYMBOL_GPL(acce4u_unregister);
 
+struct acce4u_share_info {
+	struct list_head list;
+	size_t size;
+	unsigned long vaddr;
+	struct page *pages[];
+};
+
+static struct acce4u_share_info * acce4u_search_share_info(
+	struct acce4u_queue *q, unsigned long vaddr, size_t size)
+{
+	struct acce4u_share_info *si;
+
+	list_for_each_entry(si, &q->share_mem_list, list) {
+		/* in this version, we assume the map and umap operation should
+		 * remain exact the same
+		 */
+		if (si->vaddr == vaddr && si->size == size)
+			return si;
+		else if ((vaddr > si->vaddr &&
+			  vaddr < si->vaddr + si->size) ||
+			 (si->vaddr > vaddr &&
+			  si->vaddr < vaddr + size))
+			return ERR_PTR(-EINVAL);
+	}
+
+	return NULL;
+}
+
+static int acce4u_share_mem(struct acce4u_queue *q, unsigned long arg)
+{
+	struct acce4u_mem_share_arg share;
+	struct device *dev = q->acce4u->dev;
+	struct iommu_domain * domain = iommu_get_domain_for_dev(dev);
+	int ret;
+	int prot = IOMMU_READ | IOMMU_WRITE; /* use bi-dir for now */
+	struct acce4u_share_info *si, *esi;
+	struct mm_struct *mm = current->mm;
+	size_t nr_pages, i, j;
+
+	if (copy_from_user(&share, (void __user *)arg, sizeof(share)))
+		return -EFAULT;
+
+	si = (struct acce4u_share_info *)__get_free_page(GFP_KERNEL);
+	if (!si)
+		return -ENOMEM;
+
+	si->size = share.size;
+	si->vaddr = share.vaddr;
+
+	if ((share.size != si->size || share.vaddr != si->vaddr) ||
+	    (si->vaddr + si->size -1 < si->vaddr) ||	/* no wrap */
+	    !(si->vaddr & ~PAGE_MASK) ||		/* page align */
+	    !(si->size & ~PAGE_MASK) ||			/* page align */
+	    !domain) {
+		ret = -EINVAL;
+		goto err_with_si;
+	}
+
+	esi = acce4u_search_share_info(q, si->vaddr, si->size);
+	if (IS_ERR(esi)) {
+		ret = PTR_ERR(esi);
+		goto err_with_si;
+	} else if (esi) {
+		ret = -EBUSY;
+		goto err_with_si;
+	}
+
+	nr_pages = si->size >> PAGE_SHIFT;
+
+	/* todo: give enough space for si */
+	BUG_ON(nr_pages*sizeof(*si->pages)+sizeof(si) > PAGE_SIZE);
+
+	/* pin the page
+	 * todo: accounting (RLIMIT_MEMLOCK) for page pin,  this is
+	 * not going to be a easy job
+	 */
+	down_read(&mm->mmap_sem);
+	ret = get_user_pages_longterm(si->vaddr, nr_pages, FOLL_WRITE,
+			si->pages, NULL);
+	up_read(&mm->mmap_sem);
+	if (ret)
+		goto err_with_si;
+
+	/* map the page one by one */
+	for (i = 0; i < nr_pages; i++) {
+		ret = iommu_map(domain, si->vaddr + (i << PAGE_SHIFT),
+				page_to_pfn(si->pages[i]), PAGE_SIZE, prot);
+		if (ret)
+			goto err_with_map;
+	}
+
+	list_add(&si->list, &q->share_mem_list);
+
+	return 0;
+
+err_with_map:
+	for (j = i; j >= 0; j--) {
+		iommu_unmap(domain, page_to_pfn(si->pages[j]), PAGE_SIZE);
+		SetPageDirty(si->pages[j]);
+		put_page(si->pages[j]);
+	}
+
+err_with_si:
+	free_page((unsigned long)si);
+	return ret;
+}
+
+static int acce4u_unshare_mem(struct acce4u_queue *q, unsigned long arg)
+{
+	struct acce4u_mem_share_arg share;
+	struct device *dev = q->acce4u->dev;
+	struct iommu_domain * domain = iommu_get_domain_for_dev(dev);
+	struct acce4u_share_info *si;
+	size_t nr_pages, i;
+
+	if (copy_from_user(&share, (void __user *)arg, sizeof(share)))
+		return -EFAULT;
+
+	if (!domain)
+		return -ENODEV;
+
+	si = acce4u_search_share_info(q, share.vaddr, share.size);
+	if (IS_ERR_OR_NULL(si))
+		return PTR_ERR_OR_ZERO(si);
+
+	nr_pages = si->size >> PAGE_SHIFT;
+
+	for (i = 0; i < nr_pages; i++) {
+		iommu_unmap(domain, page_to_pfn(si->pages[i]), PAGE_SIZE);
+		SetPageDirty(si->pages[i]);
+		put_page(si->pages[i]); /* todo: accounting */
+	}
+
+	list_del(&si->list);
+	free_page((unsigned long)si);
+
+	return 0;
+}
+
 static long acce4u_fops_unl_ioctl(struct file *filep,
 				unsigned int cmd, unsigned long arg)
 {
@@ -101,9 +240,9 @@ static long acce4u_fops_unl_ioctl(struct file *filep,
 
 	switch (cmd) {
 	case ACCE4U_CMD_SHARE_MEM:
-		return -EINVAL; //todo
+		return acce4u_share_mem(q, arg);
 	case ACCE4U_CMD_UNSHARE_MEM:
-		return -EINVAL; //todo
+		return acce4u_unshare_mem(q, arg);
 	default:
 		if (acce4u->ops->ioctl)
 			return acce4u->ops->ioctl(q, cmd, arg);
@@ -150,6 +289,7 @@ static int acce4u_fops_open(struct inode *inode, struct file *filep)
 
 	q->acce4u = acce4u;
 	init_waitqueue_head(&q->wait);
+	INIT_LIST_HEAD(&q->share_mem_list);
 	filep->private_data = q;
 
 	return ret;
@@ -159,9 +299,30 @@ static int acce4u_fops_release(struct inode *inode, struct file *filep)
 {
 	struct acce4u_queue *q = (struct acce4u_queue *)filep->private_data;
 	struct acce4u *acce4u = q->acce4u;
+	struct acce4u_share_info *si, *si_tmp;
+	struct device *dev = acce4u->dev;
+	struct iommu_domain * domain = iommu_get_domain_for_dev(dev);
+	size_t nr_pages, i;
+
+	WARN_ON(!domain);
+	
+	acce4u->ops->stop_queue(q);
+
+	list_for_each_entry_safe(si, si_tmp, &q->share_mem_list, list) {
+		nr_pages = si->size >> PAGE_SHIFT;
+		for (i = 0; i < nr_pages; i++) {
+			iommu_unmap(domain, page_to_pfn(si->pages[i]),
+				    PAGE_SIZE);
+			SetPageDirty(si->pages[i]);
+			put_page(si->pages[i]); /* todo: accounting */
+		}
+
+		list_del(&si->list);
+		free_page((unsigned long)si);
+	}
 
 	acce4u->ops->put_queue(q);
-
+	
 	/* todo: should I get/put the module or device? */
 	return 0;
 }
@@ -190,7 +351,6 @@ static __poll_t acce4u_fops_poll(struct file *file, poll_table *wait)
 
 	return 0;
 }
-
 
 static const struct file_operations acce4u_fops = {
 	.owner		= THIS_MODULE,
