@@ -8,3 +8,10 @@ config VFIO_SDMDEV
 
 	  To compile this as a module, choose M here: the module will be called
 	  sdmdev.
+
+config WD_DUMMY_DEV
+	tristate "Support for WrapDrive Dummy Device"
+	depends on VFIO_SDMDEV
+	select VFIO_NOIOMMU
+	help
+	  Support for WarpDrive test driver with devices (NOT for upstream)
