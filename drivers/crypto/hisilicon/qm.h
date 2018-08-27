@@ -8,6 +8,10 @@
 #include <linux/pci.h>
 #include <linux/slab.h>
 
+#ifdef CONFIG_CRYPTO_DEV_HISI_SDMDEV
+#include <linux/vfio_sdmdev.h>
+#endif
+
 #define QM_CQE_SIZE			16
 /* default queue depth for sq/cq/eq */
 #define QM_Q_DEPTH			1024
@@ -59,6 +63,10 @@ struct qm_info {
 
 	struct hisi_acc_qm_hw_ops *ops;
 
+#ifdef CONFIG_CRYPTO_DEV_HISI_SDMDEV
+	struct vfio_sdmdev sdmdev;
+	const struct attribute_group **mdev_dev_groups;
+#endif
 };
 #define QM_ADDR(qm, off) ((qm)->io_base + off)
 
@@ -88,6 +96,10 @@ struct hisi_qp {
 	struct hisi_acc_qp_status qp_status;
 
 	struct qm_info *qm;
+
+#ifdef CONFIG_CRYPTO_DEV_HISI_SDMDEV
+	struct vfio_sdmdev_queue *sdmdev_q;
+#endif
 
 	/* for crypto sync API */
 	struct completion completion;
