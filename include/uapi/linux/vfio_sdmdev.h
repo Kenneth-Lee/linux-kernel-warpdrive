@@ -28,6 +28,7 @@ struct vfio_sdmdev_get_dma_buf_arg {
 #define	VFIO_SDMDEV_DMA_SVM			4
 #define	VFIO_SDMDEV_DMA_SVM_NO_FAULT		8
 #define	VFIO_SDMDEV_DMA_PHY			16
+#define	VFIO_SDMDEV_DMA_BUF			32
 
 #define VFIO_SDMDEV_CMD_WAIT		_IO('W', 1)
 #define VFIO_SDMDEV_CMD_BIND_PASID	_IO('W', 2)

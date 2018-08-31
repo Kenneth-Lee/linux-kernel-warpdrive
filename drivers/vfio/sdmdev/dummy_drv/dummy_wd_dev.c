@@ -46,6 +46,7 @@ static struct dummy_hw {
 	int aflags;
 	struct dummy_hw_queue qs[MAX_QUEUE];
 	struct platform_device *pdev;
+	int (*copy)(void *tgt, void *src, size_t len);
 } hws[MAX_DEV];
 
 static ssize_t
@@ -138,6 +139,15 @@ static struct attribute_group *mdev_type_groups[] = {
 	NULL,
 };
 
+#ifdef CONFIG_WD_DUMMY_DEV_DMA_BUF
+static int _do_dma_buf_copy(void *tgt, void *src, size_t len)
+{
+	memcpy(tgt, src, len);
+	return 0;
+}
+
+#else
+
 /* This function will only work in the requesting process context */
 static int _do_user_copy(void *tgt, void *src, size_t len)
 {
@@ -166,11 +176,18 @@ out_with_mem:
 	return ret;
 }
 
+#endif
+
 static void _queue_work(struct dummy_hw_queue *hwq)
 {
 	int bd_num = hwq->reg->ring_bd_num;
 	__u32 head = readl(&hwq->reg->head);
 	__u32 tail;
+
+	/* Notes: I use the latest shm, if it is not, this is going to be an
+	 * error
+	 */
+	size_t shm = (size_t)hwq->wdq.shm;
 
 	if (head >= bd_num) {
 		pr_err("dummy_wd io error, head=%d\n", head);
@@ -182,10 +199,11 @@ static void _queue_work(struct dummy_hw_queue *hwq)
 		if(hwq->reg->ring[hwq->tail].size > hwq->hw->max_copy_size)
 			hwq->reg->ring[hwq->tail].ret = -EINVAL;
 		else
-			hwq->reg->ring[hwq->tail].ret =
-			_do_user_copy(hwq->reg->ring[hwq->tail].tgt_addr,
-					hwq->reg->ring[hwq->tail].src_addr,
-					hwq->reg->ring[hwq->tail].size);
+			hwq->reg->ring[hwq->tail].ret = hwq->hw->copy(
+				shm+hwq->reg->ring[hwq->tail].tgt_addr,
+				shm+hwq->reg->ring[hwq->tail].src_addr,
+				hwq->reg->ring[hwq->tail].size);
+
 		pr_info("memcpy(%p, %p, %ld) = %d",
 			hwq->reg->ring[hwq->tail].tgt_addr,
 			hwq->reg->ring[hwq->tail].src_addr,
@@ -341,6 +359,13 @@ static int dummy_wd_probe(struct platform_device *pdev)
 	sdmdev->priv = hw;
 	sdmdev->api_ver = "wd_dummy_v1";
 	sdmdev->flags = 0;
+#ifdef CONFIG_WD_DUMMY_DEV_DMA_BUF
+	sdmdev->dma_flag |= VFIO_SDMDEV_DMA_BUF;
+	hw->copy = _do_dma_buf_copy;
+#else
+	sdmdev->dma_flag = 0;
+	hw->copy = _do_user_copy;
+#endif
 
 	sdmdev->mdev_fops.supported_type_groups = mdev_type_groups;
 	sdmdev->mdev_fops.mdev_attr_groups = mdev_dev_groups;

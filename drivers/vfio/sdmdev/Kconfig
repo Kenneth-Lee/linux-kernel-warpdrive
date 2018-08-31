@@ -15,3 +15,10 @@ config WD_DUMMY_DEV
 	select VFIO_NOIOMMU
 	help
 	  Support for WarpDrive test driver with devices (NOT for upstream)
+
+config WD_DUMMY_DEV_DMA_BUF
+	bool "Use DMA BUF mode in WrapDrive Dummy Device"
+	depends on WD_DUMMY_DEV
+	select CONFIG_DMA_SHARED_BUFFER
+	help
+	  Support for WarpDrive test driver with devices (NOT for upstream)
