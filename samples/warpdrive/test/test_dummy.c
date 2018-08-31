@@ -88,9 +88,13 @@ int main(int argc, char *argv[])
 {
 	struct wd_queue q;
 	int ret, i;
+	void *p;
 
 	ret = wd_dummy_request_memcpy_queue(&q, 4096);
 	SYS_ERR_COND(ret, "wd_request_queue");
+
+	p = wd_get_memory(&q, CPSZ);
+	SYS_ERR_COND(!p, "wd_get_memory");
 
 	for (i = 0; i < REP_TEST; i++)
 		_do_test(&q);

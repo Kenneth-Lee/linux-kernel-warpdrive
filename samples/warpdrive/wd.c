@@ -307,3 +307,39 @@ void wd_mem_unshare(struct wd_queue *q, const void *addr, size_t size)
 		_wd_mem_unshare_type1(q, addr, size);
 }
 
+void *wd_get_memory(struct wd_queue *q, size_t size)
+{
+	struct vfio_sdmdev_get_dma_buf_arg arg;
+
+	/* one shm only now */
+	if (q->shm || !q->mdev)
+		return NULL;
+
+	arg.size = size;
+	q->shm_fd = ioctl(q->mdev, VFIO_SDMDEV_CMD_GET_BUF, &arg);
+	if (q->shm_fd <= 0)
+		return NULL;
+
+	q->shm = mmap(0, size, PROT_READ | PROT_WRITE, MAP_SHARED,
+		      q->shm_fd, 0);
+	if (!q->shm) {
+		WD_ERR("wd get memory: mmap dma_buf fail\n");
+		close(q->shm_fd);
+		q->shm = NULL;
+		q->shm_fd = 0;
+		return NULL;
+	}
+
+	return q->shm;
+}
+
+void wd_put_memory(struct wd_queue *q, void *ptr)
+{
+	if (ptr == q->shm) {
+		close(q->shm_fd);
+		q->shm = NULL;
+		q->shm_fd = 0;
+	}else
+		WD_ERR("put memory: unknow ptr\n");
+
+}

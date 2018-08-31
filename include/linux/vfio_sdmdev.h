@@ -3,6 +3,7 @@
 #define __VFIO_SDMDEV_H
 
 #include <linux/device.h>
+#include <linux/dma-buf.h>
 #include <linux/iommu.h>
 #include <linux/mdev.h>
 #include <linux/vfio.h>
@@ -55,6 +56,11 @@ struct vfio_sdmdev_queue {
 	int container;
 #ifdef CONFIG_IOMMU_SVA
 	int pasid;
+#endif
+
+#ifdef CONFIG_DMA_SHARED_BUFFER
+	void *shm;
+	struct dma_buf *dma_buf;
 #endif
 };
 

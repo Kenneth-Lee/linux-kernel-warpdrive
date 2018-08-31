@@ -16,6 +16,11 @@
 /* Maximum length of algorithm name string */
 #define VFIO_SDMDEV_ALG_NAME_SIZE		64
 
+
+struct vfio_sdmdev_get_dma_buf_arg {
+	size_t size;
+};
+
 /* the bits used in SDMDEV_DMA_FLAG attributes */
 #define VFIO_SDMDEV_DMA_INVALID			0
 #define	VFIO_SDMDEV_DMA_SINGLE_PROC_MAP		1
@@ -26,4 +31,6 @@
 
 #define VFIO_SDMDEV_CMD_WAIT		_IO('W', 1)
 #define VFIO_SDMDEV_CMD_BIND_PASID	_IO('W', 2)
+#define VFIO_SDMDEV_CMD_GET_BUF		_IOW('W', 3, \
+		struct vfio_sdmdev_get_dma_buf_arg)
 #endif

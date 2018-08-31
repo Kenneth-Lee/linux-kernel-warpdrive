@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0+
 #include <linux/module.h>
+#include <linux/slab.h>
 #include <linux/vfio_sdmdev.h>
 
 static struct class *sdmdev_class;
@@ -222,6 +223,106 @@ static inline int vfio_sdmdev_wait(struct vfio_sdmdev_queue *q,
 	return ret;
 }
 
+#ifdef CONFIG_DMA_SHARED_BUFFER
+static struct sg_table *vfio_sdmdev_op_map_dma_buf(struct dma_buf_attachment
+			*attach, enum dma_data_direction dir)
+{
+	/* todo: map to device by calling back the queue provider */
+	return NULL;
+}
+
+static void vfio_sdmdev_op_unmap_dma_buf(struct dma_buf_attachment *attach,
+				     struct sg_table *table,
+				     enum dma_data_direction dir)
+{
+	/* todo */
+}
+
+static void vfio_sdmdev_op_release(struct dma_buf *dmabuf)
+{
+	struct vfio_sdmdev_queue *q = dmabuf->priv;
+	kfree(q->shm);
+	q->shm = NULL;
+}
+
+static void *vfio_sdmdev_op_map(struct dma_buf *dmabuf, unsigned long pgnum)
+{
+	/* no need to map, it is memory only */
+	return NULL;
+}
+
+/* map this buffer to user space */
+static int vfio_sdmdev_op_mmap(struct dma_buf *dmabuf, struct vm_area_struct *vma)
+{
+	struct vfio_sdmdev_queue *q = dmabuf->priv;
+	size_t size = vma->vm_end - vma->vm_start;
+
+	if (size > dmabuf->size)
+		return -EINVAL;
+
+	return remap_pfn_range(vma, vma->vm_start, virt_to_phys(q->shm),
+			       size, vma->vm_page_prot);
+}
+
+static const struct dma_buf_ops vfio_sdmdev_dma_buf_ops = {
+	.map_dma_buf = vfio_sdmdev_op_map_dma_buf,
+	.unmap_dma_buf = vfio_sdmdev_op_unmap_dma_buf,
+	.release = vfio_sdmdev_op_release,
+	.map = vfio_sdmdev_op_map,
+	.mmap = vfio_sdmdev_op_mmap,
+};
+
+static inline int vfio_sdmdev_get_dma_buf(struct vfio_sdmdev_queue *q,
+					  void __user *arg)
+{
+	DEFINE_DMA_BUF_EXPORT_INFO(exp_info);
+	struct vfio_sdmdev_get_dma_buf_arg db_arg;
+	int fd;
+
+	/* support one shm memory for now */
+	if (q->shm)
+		return -EBUSY;
+
+	if (copy_from_user(&db_arg, arg, sizeof(db_arg)))
+		return -EFAULT;
+
+	/* not support too big for now */
+	if (db_arg.size > 4*PAGE_SIZE)
+		return -ENOMEM;
+
+	/* todo: big memory should be allocated by get_pages(), this is just a
+	 * temporary implementation
+	 */
+	q->shm = kzalloc(db_arg.size, GFP_KERNEL);
+	if (!q->shm)
+		return -ENOMEM;
+
+	exp_info.ops = &vfio_sdmdev_dma_buf_ops;
+	exp_info.size = db_arg.size;
+	exp_info.flags = O_RDWR;
+	exp_info.priv = q;
+
+	q->dma_buf = dma_buf_export(&exp_info);
+	if (!q->dma_buf) {
+		fd = PTR_ERR(q->dma_buf);
+		goto err_with_pages;
+	}
+
+	fd = dma_buf_fd(q->dma_buf, 0);
+	if (fd < 0)
+		goto err_with_dma_buf;
+
+	return fd;
+
+err_with_dma_buf:
+	dma_buf_put(q->dma_buf);
+err_with_pages:
+	kfree(q->shm);
+	q->shm = NULL;
+	return fd;
+}
+#endif
+
 static long vfio_sdmdev_mdev_ioctl(struct mdev_device *mdev, unsigned int cmd,
 			       unsigned long arg)
 {
@@ -249,6 +350,11 @@ static long vfio_sdmdev_mdev_ioctl(struct mdev_device *mdev, unsigned int cmd,
 		mutex_unlock(&q->mutex);
 
 		return ret;
+#endif
+
+#ifdef CONFIG_DMA_SHARED_BUFFER
+	case VFIO_SDMDEV_CMD_GET_BUF:
+		return vfio_sdmdev_get_dma_buf(q, (void __user *)arg);
 #endif
 
 	default:
