@@ -135,6 +135,7 @@ struct wd_queue {
 
 	void *shm;
 	int shm_fd;
+	size_t shm_sz;
 };
 
 extern int wd_request_queue(struct wd_queue *q);
@@ -146,8 +147,6 @@ extern int wd_recv_sync(struct wd_queue *q, void **resp, __u16 ms);
 extern int wd_mem_share(struct wd_queue *q, const void *addr,
 			size_t size, int flags);
 extern void wd_mem_unshare(struct wd_queue *q, const void *addr, size_t size);
-extern void *wd_get_memory(struct wd_queue *q, size_t size);
-extern void wd_put_memory(struct wd_queue *q, void *ptr);
 
 /* for debug only */
 extern int wd_dump_all_algos(void);

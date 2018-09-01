@@ -2,6 +2,7 @@
 #include <linux/module.h>
 #include <linux/slab.h>
 #include <linux/vfio_sdmdev.h>
+#include <linux/pagemap.h>
 
 static struct class *sdmdev_class;
 
@@ -224,52 +225,169 @@ static inline int vfio_sdmdev_wait(struct vfio_sdmdev_queue *q,
 }
 
 #ifdef CONFIG_DMA_SHARED_BUFFER
-static struct sg_table *vfio_sdmdev_op_map_dma_buf(struct dma_buf_attachment
-			*attach, enum dma_data_direction dir)
+static struct sg_table *vfio_sdmdev_dmabuf_op_map_dma_buf(
+			struct dma_buf_attachment *attach,
+			enum dma_data_direction dir)
 {
 	/* todo: map to device by calling back the queue provider */
 	return NULL;
 }
 
-static void vfio_sdmdev_op_unmap_dma_buf(struct dma_buf_attachment *attach,
-				     struct sg_table *table,
-				     enum dma_data_direction dir)
+static void vfio_sdmdev_dmabuf_op_unmap_dma_buf(
+			struct dma_buf_attachment *attach,
+			struct sg_table *table,
+			enum dma_data_direction dir)
 {
 	/* todo */
 }
 
-static void vfio_sdmdev_op_release(struct dma_buf *dmabuf)
+static inline struct vfio_sdmdev_dma_buf_ctx *vfio_sdmdev_create_dma_buf_ctx(
+		size_t size)
 {
-	struct vfio_sdmdev_queue *q = dmabuf->priv;
-	kfree(q->shm);
-	q->shm = NULL;
+	struct vfio_sdmdev_dma_buf_ctx *ctx;
+	int pagenum = DIV_ROUND_UP(size, PAGE_SIZE);
+
+	ctx = kzalloc(sizeof(*ctx)+sizeof(struct page *)*pagenum, GFP_KERNEL);
+	if (!ctx)
+		return ERR_PTR(-ENOMEM);
+
+	ctx->pagenum = pagenum;
+	mutex_init(&ctx->lock);
+
+	return ctx;
 }
 
-static void *vfio_sdmdev_op_map(struct dma_buf *dmabuf, unsigned long pgnum)
+static inline void vfio_sdmdev_release_dma_buf_ctx(
+		struct vfio_sdmdev_dma_buf_ctx *ctx)
 {
-	/* no need to map, it is memory only */
-	return NULL;
+	kfree(ctx);
 }
+
+static void vfio_sdmdev_dmabuf_op_release(struct dma_buf *dmabuf)
+{
+	struct vfio_sdmdev_dma_buf_ctx *ctx = dmabuf->priv;
+	int i;
+
+	mutex_lock(&ctx->lock);
+
+	for (i=0; i < ctx->pagenum; i++) {
+		if (ctx->pages[i]) {
+			put_page(ctx->pages[i]);
+		}
+	}
+
+	mutex_unlock(&ctx->lock);
+
+	vfio_sdmdev_release_dma_buf_ctx(ctx);
+}
+
+static void *vfio_sdmdev_dmabuf_op_map(struct dma_buf *dmabuf,
+				       unsigned long pgnum)
+{
+	struct vfio_sdmdev_dma_buf_ctx *ctx = dmabuf->priv;
+	int i, j;
+	void * vaddr;
+
+	mutex_lock(&ctx->lock);
+
+	for (i=0; i < pgnum; i++) {
+		if (!ctx->pages[i]) {
+			ctx->pages[i] = alloc_page(GFP_USER);
+			if (!ctx->pages[i]) {
+				for (j=i-1; j>=0; j--)
+					put_page(ctx->pages[j]);
+				mutex_unlock(&ctx->lock);
+				return ERR_PTR(-ENOMEM);
+			}
+		}
+		get_page(ctx->pages[i]);
+	}
+
+	vaddr = vmap(ctx->pages, pgnum, VM_MAP, PAGE_KERNEL);
+
+	mutex_unlock(&ctx->lock);
+
+	return vaddr;
+}
+
+static void vfio_sdmdev_dmabuf_op_unmap(struct dma_buf *dmabuf,
+					unsigned long page_num, void *vaddr)
+{
+	struct vfio_sdmdev_dma_buf_ctx *ctx = dmabuf->priv;
+	int i;
+
+	vunmap(vaddr);
+
+	mutex_lock(&ctx->lock);
+	for (i=0; i < page_num; i++) {
+		if (ctx->pages[i]) {
+			put_page(ctx->pages[i]);
+		}else
+			WARN(1, "kerne umap un-allocated page\n");
+	}
+
+	mutex_unlock(&ctx->lock);
+}
+
+static vm_fault_t vfio_sdmdev_vm_fault(struct vm_fault *vmf)
+{
+	struct vm_area_struct *vma = vmf->vma;
+	struct dma_buf *dmabuf = vma->vm_private_data;
+	struct vfio_sdmdev_dma_buf_ctx *ctx = dmabuf->priv;
+
+	pgoff_t page_offset = (vmf->address - vma->vm_start) >> PAGE_SHIFT;
+
+	if (page_offset >= ctx->pagenum)
+		return VM_FAULT_SIGBUS;
+
+	mutex_lock(&ctx->lock);
+	if (!ctx->pages[page_offset]) {
+		ctx->pages[page_offset] = alloc_page(GFP_USER);
+	}
+
+	vmf->page = ctx->pages[page_offset];
+
+
+	if (!vmf->page) {
+		mutex_unlock(&ctx->lock);
+		return VM_FAULT_SIGBUS;
+	}
+
+	get_page(vmf->page);
+
+	mutex_unlock(&ctx->lock);
+	return 0;
+}
+
+static const struct vm_operations_struct vfio_sdmdev_vm_ops = {
+	.fault = vfio_sdmdev_vm_fault,
+};
 
 /* map this buffer to user space */
-static int vfio_sdmdev_op_mmap(struct dma_buf *dmabuf, struct vm_area_struct *vma)
+static int vfio_sdmdev_dmabuf_op_mmap(struct dma_buf *dmabuf,
+				      struct vm_area_struct *vma)
 {
-	struct vfio_sdmdev_queue *q = dmabuf->priv;
-	size_t size = vma->vm_end - vma->vm_start;
-
-	if (size > dmabuf->size)
+	if (vma->vm_pgoff >= dmabuf->size >> PAGE_SHIFT)
+		return -EINVAL;
+	if (vma->vm_end < vma->vm_start)
+		return -EINVAL;
+	if (vma->vm_end - vma->vm_start > dmabuf->size)
+		return -EINVAL;
+	if ((vma->vm_flags & VM_SHARED) == 0)
 		return -EINVAL;
 
-	return remap_pfn_range(vma, vma->vm_start, virt_to_phys(q->shm),
-			       size, vma->vm_page_prot);
+	vma->vm_ops = &vfio_sdmdev_vm_ops;
+	vma->vm_private_data = dmabuf;
+	return 0;
 }
 
 static const struct dma_buf_ops vfio_sdmdev_dma_buf_ops = {
-	.map_dma_buf = vfio_sdmdev_op_map_dma_buf,
-	.unmap_dma_buf = vfio_sdmdev_op_unmap_dma_buf,
-	.release = vfio_sdmdev_op_release,
-	.map = vfio_sdmdev_op_map,
-	.mmap = vfio_sdmdev_op_mmap,
+	.map_dma_buf = vfio_sdmdev_dmabuf_op_map_dma_buf,
+	.unmap_dma_buf = vfio_sdmdev_dmabuf_op_unmap_dma_buf,
+	.release = vfio_sdmdev_dmabuf_op_release,
+	.map = vfio_sdmdev_dmabuf_op_map,
+	.unmap = vfio_sdmdev_dmabuf_op_unmap,
+	.mmap = vfio_sdmdev_dmabuf_op_mmap,
 };
 
 static inline int vfio_sdmdev_get_dma_buf(struct vfio_sdmdev_queue *q,
@@ -277,49 +395,53 @@ static inline int vfio_sdmdev_get_dma_buf(struct vfio_sdmdev_queue *q,
 {
 	DEFINE_DMA_BUF_EXPORT_INFO(exp_info);
 	struct vfio_sdmdev_get_dma_buf_arg db_arg;
-	int fd;
+	struct vfio_sdmdev_dma_buf_ctx *ctx;
+	int ret;
 
-	/* support one shm memory for now */
-	if (q->shm)
-		return -EBUSY;
+	mutex_lock(&q->mutex);
+	if (q->dma_buf) {
+		ret = -EBUSY;
+		goto err_with_lock;
+	}
 
-	if (copy_from_user(&db_arg, arg, sizeof(db_arg)))
-		return -EFAULT;
+	if (copy_from_user(&db_arg, arg, sizeof(db_arg))) {
+		ret = -EFAULT;
+		goto err_with_lock;
+	}
 
-	/* not support too big for now */
-	if (db_arg.size > 4*PAGE_SIZE)
-		return -ENOMEM;
 
-	/* todo: big memory should be allocated by get_pages(), this is just a
-	 * temporary implementation
-	 */
-	q->shm = kzalloc(db_arg.size, GFP_KERNEL);
-	if (!q->shm)
-		return -ENOMEM;
+	ctx = vfio_sdmdev_create_dma_buf_ctx(db_arg.size);
+	if (!ctx) {
+		ret = PTR_ERR(ctx);
+		goto err_with_lock;
+	}
 
 	exp_info.ops = &vfio_sdmdev_dma_buf_ops;
 	exp_info.size = db_arg.size;
 	exp_info.flags = O_RDWR;
-	exp_info.priv = q;
+	exp_info.priv = ctx;
 
 	q->dma_buf = dma_buf_export(&exp_info);
 	if (!q->dma_buf) {
-		fd = PTR_ERR(q->dma_buf);
-		goto err_with_pages;
+		ret = PTR_ERR(q->dma_buf);
+		goto err_with_ctx;
 	}
 
-	fd = dma_buf_fd(q->dma_buf, 0);
-	if (fd < 0)
+	ret = dma_buf_fd(q->dma_buf, 0);
+	if (ret < 0)
 		goto err_with_dma_buf;
 
-	return fd;
+	mutex_unlock(&q->mutex);
+	return ret;
 
 err_with_dma_buf:
 	dma_buf_put(q->dma_buf);
-err_with_pages:
-	kfree(q->shm);
-	q->shm = NULL;
-	return fd;
+	q->dma_buf = NULL;
+err_with_ctx:
+	vfio_sdmdev_release_dma_buf_ctx(ctx);
+err_with_lock:
+	mutex_unlock(&q->mutex);
+	return ret;
 }
 #endif
 
@@ -374,8 +496,16 @@ static void vfio_sdmdev_mdev_release(struct mdev_device *mdev)
 		(struct vfio_sdmdev_queue *)mdev_get_drvdata(mdev);
 	struct vfio_sdmdev *sdmdev = q->sdmdev;
 
+	if (q->dma_buf) {
+		dev_info(mdev_dev(q->mdev), "clear old dma_buf %lx\n",
+			 (unsigned long)q->dma_buf);
+		q->dma_buf = NULL;
+
+	}
+
 	if (sdmdev->ops->stop_queue)
 		sdmdev->ops->stop_queue(q);
+
 }
 
 static int vfio_sdmdev_mdev_open(struct mdev_device *mdev)
@@ -388,6 +518,13 @@ static int vfio_sdmdev_mdev_open(struct mdev_device *mdev)
 	if (sdmdev->ops->start_queue)
 		sdmdev->ops->start_queue(q);
 #endif
+	/* clear the shm for a new process */
+	if (q->dma_buf) {
+		dev_info(mdev_dev(q->mdev), "clear old dma_buf %lx\n",
+			 (unsigned long)q->dma_buf);
+		q->dma_buf = NULL;
+
+	}
 
 	return 0;
 }

@@ -183,11 +183,12 @@ static void _queue_work(struct dummy_hw_queue *hwq)
 	int bd_num = hwq->reg->ring_bd_num;
 	__u32 head = readl(&hwq->reg->head);
 	__u32 tail;
+	struct vfio_sdmdev_dma_buf_ctx *ctx = hwq->wdq.dma_buf->priv;
 
 	/* Notes: I use the latest shm, if it is not, this is going to be an
 	 * error
 	 */
-	size_t shm = (size_t)hwq->wdq.shm;
+	void *shm = dma_buf_kmap(hwq->wdq.dma_buf, ctx->pagenum);
 
 	if (head >= bd_num) {
 		pr_err("dummy_wd io error, head=%d\n", head);
@@ -196,13 +197,16 @@ static void _queue_work(struct dummy_hw_queue *hwq)
 
 	tail = hwq->tail;
 	while (hwq->tail != head) {
+
 		if(hwq->reg->ring[hwq->tail].size > hwq->hw->max_copy_size)
 			hwq->reg->ring[hwq->tail].ret = -EINVAL;
-		else
+		else {
 			hwq->reg->ring[hwq->tail].ret = hwq->hw->copy(
-				shm+hwq->reg->ring[hwq->tail].tgt_addr,
-				shm+hwq->reg->ring[hwq->tail].src_addr,
+				(size_t)shm+hwq->reg->ring[hwq->tail].tgt_addr,
+				(size_t)shm+hwq->reg->ring[hwq->tail].src_addr,
 				hwq->reg->ring[hwq->tail].size);
+		}
+
 
 		pr_info("memcpy(%p, %p, %ld) = %d",
 			hwq->reg->ring[hwq->tail].tgt_addr,
@@ -219,6 +223,8 @@ static void _queue_work(struct dummy_hw_queue *hwq)
 		hwq->updated = 1;
 		vfio_sdmdev_wake_up(&hwq->wdq);
 	}
+
+	dma_buf_kunmap(hwq->wdq.dma_buf, ctx->pagenum, shm);
 }
 
 static int dummy_is_q_updated(struct vfio_sdmdev_queue *q)
@@ -339,7 +345,7 @@ static int dummy_wd_probe(struct platform_device *pdev)
 
 	hw = &hws[pdev->id];
 	hw->aflags = 0;
-	hw->max_copy_size = 4096;
+	hw->max_copy_size = 4096*10;
 
 	sdmdev = devm_kzalloc(&pdev->dev, sizeof(struct vfio_sdmdev), GFP_KERNEL);
 	if (!sdmdev)

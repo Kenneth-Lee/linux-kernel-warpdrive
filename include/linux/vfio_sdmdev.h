@@ -45,6 +45,12 @@ struct vfio_sdmdev_ops {
 	int (*get_available_instances)(struct vfio_sdmdev *sdmdev);
 };
 
+struct vfio_sdmdev_dma_buf_ctx {
+	struct mutex lock;
+	int pagenum;
+	struct page *pages[];
+};
+
 struct vfio_sdmdev_queue {
 	struct mutex mutex;
 	struct vfio_sdmdev *sdmdev;
@@ -59,7 +65,6 @@ struct vfio_sdmdev_queue {
 #endif
 
 #ifdef CONFIG_DMA_SHARED_BUFFER
-	void *shm;
 	struct dma_buf *dma_buf;
 #endif
 };

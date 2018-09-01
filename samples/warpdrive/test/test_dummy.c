@@ -14,8 +14,6 @@
 	perror(msg); \
 	exit(EXIT_FAILURE); }
 
-static void *shm = NULL;
-
 int wd_dummy_memcpy(struct wd_queue *q, void *dst, void *src, size_t size)
 {
 	struct wd_dummy_cpy_msg req, *resp;
@@ -40,6 +38,7 @@ int wd_dummy_request_memcpy_queue(struct wd_queue *q, int max_copy_size)
 	q->iommu_ext_path = "/sys/class/sdmdev/dummy_wd.0/device/params/iommu_type";
 	q->dmaflag_ext_path = "/sys/class/sdmdev/dummy_wd.0/device/params/dma_flag";
 	q->device_api_path = "/sys/class/sdmdev/dummy_wd.0/device/mdev_supported_types/dummy_wd-memcopy/device_api";
+	q->shm_sz = CPSZ*2+4096*2;
 	return wd_request_queue(q);
 }
 
@@ -49,29 +48,29 @@ static void _do_test(struct wd_queue *q)
 	char *s, *t;
 
 	//init user data (to be copied)
-	if (q->dma_flag | VFIO_SDMDEV_DMA_BUF) {
-		shm = wd_get_memory(q, CPSZ*2);
-		SYS_ERR_COND(!shm, "wd_get_memory");
-
-		s = shm;
-		t = shm + CPSZ;
+	if (q->dma_flag & VFIO_SDMDEV_DMA_BUF) {
+		s = q->shm;
+		t = q->shm + CPSZ;
 	} else {
 		s = malloc(CPSZ);
 		SYS_ERR_COND(!s, "malloc saddr");
-		memset(s, 'x', CPSZ);
 
 		ret = wd_mem_share(q, s, CPSZ, 0);
 		SYS_ERR_COND(!s, "mem_share src");
 
 		t = malloc(CPSZ);
 		SYS_ERR_COND(!t, "malloc taddr");
-		memset(t, 'y', CPSZ);
 
 		ret = wd_mem_share(q, t, CPSZ, 0);
 		SYS_ERR_COND(!t, "mem_share tgt");
 	}
 
-	ret = wd_dummy_memcpy(q, t-(size_t)shm, s-(size_t)shm, CPSZ);
+	printf("after map\n");
+	memset(t, 'y', CPSZ);
+	memset(s, 'x', CPSZ);
+	printf("memset\n");
+
+	ret = wd_dummy_memcpy(q, t-(size_t)q->shm, s-(size_t)q->shm, CPSZ);
 	SYS_ERR_COND(ret, "acce cpy");
 
 	//verify result
@@ -86,10 +85,7 @@ static void _do_test(struct wd_queue *q)
 	if (i == CPSZ)
 		printf("test success\n");
 
-	if (q->dma_flag | VFIO_SDMDEV_DMA_BUF) {
-		wd_put_memory(q, shm);
-		shm = NULL;
-	} else {
+	if (!(q->dma_flag & VFIO_SDMDEV_DMA_BUF)) {
 		wd_mem_unshare(q, s, CPSZ);
 		wd_mem_unshare(q, t, CPSZ);
 		free(s);

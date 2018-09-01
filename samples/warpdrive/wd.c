@@ -63,6 +63,42 @@ static int _wd_unbind_process(struct wd_queue *q)
 }
 #endif
 
+static int wd_get_memory(struct wd_queue *q)
+{
+	struct vfio_sdmdev_get_dma_buf_arg arg;
+
+	if (!(q->dma_flag & VFIO_SDMDEV_DMA_BUF))
+		return 0;
+
+	arg.size = q->shm_sz;
+	q->shm_fd = ioctl(q->mdev, VFIO_SDMDEV_CMD_GET_BUF, &arg);
+	if (q->shm_fd <= 0)
+		return -ENOMEM;
+
+	q->shm = mmap(0, q->shm_sz, PROT_READ | PROT_WRITE, MAP_SHARED,
+		      q->shm_fd, 0);
+	if (q->shm == MAP_FAILED) {
+		WD_ERR("wd get memory: mmap dma_buf fail(%ld)\n",
+		       (unsigned long)q->shm);
+		close(q->shm_fd);
+		q->shm = NULL;
+		q->shm_fd = 0;
+		return -ENOMEM;
+	}
+
+	return 0;
+}
+
+static void wd_put_memory(struct wd_queue *q)
+{
+	if (q->shm) {
+		munmap(q->shm, q->shm_sz);
+		close(q->shm_fd);
+		q->shm = NULL;
+		q->shm_fd = 0;
+	}
+}
+
 int wd_request_queue(struct wd_queue *q)
 {
 	struct vfio_group_status group_status = {
@@ -172,8 +208,14 @@ int wd_request_queue(struct wd_queue *q)
 	if (ret)
 		goto err_with_mdev;
 
+	ret = wd_get_memory(q);
+	if (ret)
+		goto err_with_drv_open;
+
 	return 0;
 
+err_with_drv_open:
+	drv_close(q);
 err_with_mdev:
 	close(q->mdev);
 err_with_container:
@@ -185,6 +227,7 @@ err_with_group:
 
 void wd_release_queue(struct wd_queue *q)
 {
+	wd_put_memory(q);
 	drv_close(q);
 
 #if (defined(HAVE_SVA) & HAVE_SVA)
@@ -307,39 +350,3 @@ void wd_mem_unshare(struct wd_queue *q, const void *addr, size_t size)
 		_wd_mem_unshare_type1(q, addr, size);
 }
 
-void *wd_get_memory(struct wd_queue *q, size_t size)
-{
-	struct vfio_sdmdev_get_dma_buf_arg arg;
-
-	/* one shm only now */
-	if (q->shm || !q->mdev)
-		return NULL;
-
-	arg.size = size;
-	q->shm_fd = ioctl(q->mdev, VFIO_SDMDEV_CMD_GET_BUF, &arg);
-	if (q->shm_fd <= 0)
-		return NULL;
-
-	q->shm = mmap(0, size, PROT_READ | PROT_WRITE, MAP_SHARED,
-		      q->shm_fd, 0);
-	if (!q->shm) {
-		WD_ERR("wd get memory: mmap dma_buf fail\n");
-		close(q->shm_fd);
-		q->shm = NULL;
-		q->shm_fd = 0;
-		return NULL;
-	}
-
-	return q->shm;
-}
-
-void wd_put_memory(struct wd_queue *q, void *ptr)
-{
-	if (ptr == q->shm) {
-		close(q->shm_fd);
-		q->shm = NULL;
-		q->shm_fd = 0;
-	}else
-		WD_ERR("put memory: unknow ptr\n");
-
-}
