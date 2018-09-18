@@ -1,9 +1,9 @@
-menuconfig ACCE4U
+menuconfig UACCE
 	tristate "Accelerator Framework for user land"
 	depends on IOMMU_API
 	select ANON_INODES
 	help
-	  ACCE4U provodes a framework for user process get service from the
+	  UACCE provodes a framework for user process get service from the
 	  hardware accelerator without syscall on the data path.
 	  See Documentation/warpdrive/warpdrive.rst for more details.
 

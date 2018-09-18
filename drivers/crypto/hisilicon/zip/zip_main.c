@@ -5,7 +5,7 @@
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/pci.h>
-#include <linux/acce4u.h>
+#include <linux/uacce.h>
 #include "zip.h"
 #include "zip_crypto.h"
 

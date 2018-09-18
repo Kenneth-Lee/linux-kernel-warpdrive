@@ -185,4 +185,4 @@ obj-$(CONFIG_TEE)		+= tee/
 obj-$(CONFIG_MULTIPLEXER)	+= mux/
 obj-$(CONFIG_UNISYS_VISORBUS)	+= visorbus/
 obj-$(CONFIG_SIOX)		+= siox/
-obj-$(CONFIG_ACCE4U)		+= acce4u/
+obj-$(CONFIG_UACCE)		+= uacce/

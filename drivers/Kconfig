@@ -217,6 +217,6 @@ source "drivers/siox/Kconfig"
 
 source "drivers/slimbus/Kconfig"
 
-source "drivers/acce4u/Kconfig"
+source "drivers/uacce/Kconfig"
 
 endmenu
