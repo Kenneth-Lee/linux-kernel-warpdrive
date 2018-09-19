@@ -10,6 +10,8 @@
 struct uacce_queue;
 struct uacce;
 
+#define UACCE_FLAG_SHARE_ALL	0x1	/* support share virtual memory */
+
 /**
  * struct uacce_ops - WD device operations
  * @get_queue: get a queue from the device according to algorithm
@@ -41,8 +43,9 @@ struct uacce_ops {
 struct uacce_queue {
 	struct mutex mutex;
 	struct uacce *uacce;
-	int qid;
+	int pid;
 	__u32 flags;
+	int flags;
 	void *priv;
 	wait_queue_head_t wait;
 #ifdef CONFIG_IOMMU_SVA

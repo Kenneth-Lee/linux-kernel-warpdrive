@@ -131,6 +131,9 @@ static int uacce_share_mem(struct uacce_queue *q, unsigned long arg)
 	struct mm_struct *mm = current->mm;
 	size_t nr_pages, i, j;
 
+	if (q->flags & UACCE_FLAG_SHARE_ALL)
+		return -EINVAL;
+
 	if (copy_from_user(&share, (void __user *)arg, sizeof(share)))
 		return -EFAULT;
 
@@ -165,7 +168,7 @@ static int uacce_share_mem(struct uacce_queue *q, unsigned long arg)
 	BUG_ON(nr_pages*sizeof(*si->pages)+sizeof(si) > PAGE_SIZE);
 
 	/* pin the page
-	 * todo: accounting (RLIMIT_MEMLOCK) for page pin,  this is
+	 * todo: accounting (RLIMIT_MEMLOCK) for page pin, this is
 	 * not going to be a easy job
 	 */
 	down_read(&mm->mmap_sem);
@@ -207,6 +210,9 @@ static int uacce_unshare_mem(struct uacce_queue *q, unsigned long arg)
 	struct uacce_share_info *si;
 	size_t nr_pages, i;
 
+	if (q->flags & UACCE_FLAG_SHARE_ALL)
+		return -EINVAL;
+
 	if (copy_from_user(&share, (void __user *)arg, sizeof(share)))
 		return -EFAULT;
 
@@ -237,6 +243,9 @@ static long uacce_fops_unl_ioctl(struct file *filep,
 	struct uacce_queue *q =
 		(struct uacce_queue *)filep->private_data;
 	struct uacce *uacce = q->uacce;
+
+	if (q->pid != current->pid)
+		return -EBUSY;
 
 	switch (cmd) {
 	case UACCE_CMD_SHARE_MEM:
@@ -288,6 +297,7 @@ static int uacce_fops_open(struct inode *inode, struct file *filep)
 	}
 
 	q->uacce = uacce;
+	q->pid = current->pid;
 	init_waitqueue_head(&q->wait);
 	INIT_LIST_HEAD(&q->share_mem_list);
 	filep->private_data = q;
@@ -332,8 +342,13 @@ static int uacce_fops_mmap(struct file *filep, struct vm_area_struct *vma)
 	struct uacce_queue *q = (struct uacce_queue *)filep->private_data;
 	struct uacce *uacce = q->uacce;
 
-	if (uacce->ops->mmap)
+	if (q->pid != current->pid)
+		return -EBUSY;
+
+	if (uacce->ops->mmap) {
+		vma->vm_flags |= VM_DONTCOPY | VM_DONTEXPAND;
 		return uacce->ops->mmap(q, vma);
+	}
 
 	dev_err(uacce->dev, "no driver mmap!\n");
 	return -EINVAL;
