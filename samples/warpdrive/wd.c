@@ -21,6 +21,8 @@ int wd_request_queue(struct wd_queue *q)
 	int ret;
 
 	q->fd = open(q->dev_path, O_RDWR | O_CLOEXEC);
+	if (q->fd == -1)
+		return -ENODEV;
 
 	ret = drv_open(q);
 	if (ret)
@@ -52,26 +54,16 @@ int wd_recv(struct wd_queue *q, void **resp)
 static int wd_flush_and_wait(struct wd_queue *q, __u16 ms)
 {
 	struct pollfd fds[1];
+	int ret;
 
 	wd_flush(q);
 	fds[0].fd = q->fd;
 	fds[0].events = POLLIN;
-	return poll(fds, 1, ms);
-}
+	ret = poll(fds, 1, ms);
+	if (ret == -1)
+		return -errno;
 
-int wd_send_sync(struct wd_queue *q, void *req, __u16 ms)
-{
-	int ret;
-
-	while (1) {
-		ret = wd_send(q, req);
-		if (ret == -EBUSY) {
-			ret = wd_flush_and_wait(q, ms);
-			if (ret)
-				return ret;
-		} else
-			return ret;
-	}
+	return 0;
 }
 
 int wd_recv_sync(struct wd_queue *q, void **resp, __u16 ms)

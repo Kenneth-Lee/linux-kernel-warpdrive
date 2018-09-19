@@ -115,14 +115,10 @@ enum wd_addr_flags {
 #define free_obj(objp) if (objp)free(objp)
 
 struct wd_queue {
-	const char *mdev_name;
 	char hw_type[PATH_STR_SIZE];
 	int hw_type_id;
 	int dma_flag;
 	void *priv; /* private data used by the drv layer */
-	int container;
-	int group;
-	int mdev;
 	int fd;
 	int pasid;
 	int iommu_type;
@@ -134,7 +130,6 @@ extern void wd_release_queue(struct wd_queue *q);
 extern int wd_send(struct wd_queue *q, void *req);
 extern int wd_recv(struct wd_queue *q, void **resp);
 extern void wd_flush(struct wd_queue *q);
-extern int wd_send_sync(struct wd_queue *q, void *req, __u16 ms);
 extern int wd_recv_sync(struct wd_queue *q, void **resp, __u16 ms);
 extern int wd_mem_share(struct wd_queue *q, const void *addr,
 			size_t size, int flags);

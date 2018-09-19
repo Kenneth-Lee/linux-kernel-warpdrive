@@ -6,6 +6,7 @@
 
 #include "wd_adapter.h"
 #include "./drv/hisi_qm_udrv.h"
+#include "./drv/dummy_drv.h"
 
 static struct wd_drv_dio_if hw_dio_tbl[] = { {
 		.hw_type = "hisi_qm_v1",
@@ -13,6 +14,15 @@ static struct wd_drv_dio_if hw_dio_tbl[] = { {
 		.close = hisi_qm_unset_queue_dio,
 		.send = hisi_qm_add_to_dio_q,
 		.recv = hisi_qm_get_from_dio_q,
+	}, {
+		.hw_type = "wd_dummy_v1",
+		.open = dummy_set_queue_dio,
+		.close = dummy_unset_queue_dio,
+		.send = dummy_add_to_dio_q,
+		.recv = dummy_get_from_dio_q,
+		.share = dummy_share,
+		.unshare = dummy_unshare,
+		.flush = dummy_flush,
 	},
 	/* Add other drivers direct IO operations here */
 };

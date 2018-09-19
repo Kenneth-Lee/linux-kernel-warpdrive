@@ -46,7 +46,6 @@ int hizip_deflate(FILE *source, FILE *dest,  int type)
 	int output_num;
 	int fd, file_msize;
 
-	q.container = -1;
 	q.dev_path = "/dev/ua1";
 	ret = wd_request_queue(&q);
 	SYS_ERR_COND(ret, "wd_request_queue");
