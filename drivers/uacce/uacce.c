@@ -14,83 +14,9 @@ struct uacce_mdev_state {
 static struct class *uacce_class;
 static DEFINE_IDR(uacce_idr);
 static dev_t uacce_devt;
-static struct cdev uacce_cdev;
+//static struct cdev uacce_cdev;
 
-/**
- * cce4u_wake_up - Wake up the process who is waiting this queue
- * @q the accelerator queue to wake up
- */
-void uacce_wake_up(struct uacce_queue *q)
-{
-	wake_up(&q->wait);
-}
-EXPORT_SYMBOL_GPL(uacce_wake_up);
-
-static void uacce_cls_release(struct device *dev) { }
-
-/**
- *	uacce_register - register an accelerator
- *	@uacce: the accelerator structure
- */
-int uacce_register(struct uacce *uacce)
-{
-	int ret;
-	const char *drv_name;
-	struct device *dev;
-
-	if (!uacce->dev)
-		return -ENODEV;
-
-	drv_name = dev_driver_string(uacce->dev);
-	if (strstr(drv_name, "-")) {
-		pr_err("uacce: parent driver name cannot include '-'!\n");
-		return -EINVAL;
-	}
-
-	uacce->dev_id = idr_alloc(&uacce_idr, uacce, 0, 0, GFP_KERNEL);
-	if (uacce->dev_id < 0)
-		return uacce->dev_id;
-
-	atomic_set(&uacce->ref, 0); /* kenny: check if this is necessary */
-	uacce->cls_dev.parent = uacce->dev;
-	uacce->cls_dev.class = uacce_class;
-	uacce->cls_dev.release = uacce_cls_release;
-	dev_set_name(&uacce->cls_dev, "%s", dev_name(uacce->dev));
-	ret = device_register(&uacce->cls_dev);
-	if (ret)
-		goto err_with_idr;
-
-	dev = device_create(uacce_class, uacce->dev,
-			MKDEV(MAJOR(uacce_devt), uacce->dev_id),
-			uacce, "acce%d", uacce->dev_id);
-	if (IS_ERR(dev))
-		goto err_with_cls_dev;
-
-	return 0;
-
-err_with_cls_dev:
-	device_unregister(&uacce->cls_dev);
-err_with_idr:
-	idr_remove(&uacce_idr, uacce->dev_id);
-	return ret;
-}
-EXPORT_SYMBOL_GPL(uacce_register);
-
-/**
- * uacce_unregister - unregisters a uacce
- * @uacce: the accelerator to unregister
- *
- * Unregister an accelerator that wat previously successully registered with
- * uacce_register().
- */
-void uacce_unregister(struct uacce *uacce)
-{
-	idr_remove(&uacce_idr, uacce->dev_id);
-	device_unregister(&uacce->cls_dev);
-	device_destroy(uacce_class,
-		       MKDEV(MAJOR(uacce_devt), uacce->dev_id));
-}
-EXPORT_SYMBOL_GPL(uacce_unregister);
+static DEFINE_MUTEX(uacce_mutex);
 
 struct uacce_share_info {
 	struct list_head list;
@@ -120,6 +46,19 @@ static struct uacce_share_info * uacce_search_share_info(
 	return NULL;
 }
 
+/**
+ * cce4u_wake_up - Wake up the process who is waiting this queue
+ * @q the accelerator queue to wake up
+ */
+void uacce_wake_up(struct uacce_queue *q)
+{
+	wake_up(&q->wait);
+}
+EXPORT_SYMBOL_GPL(uacce_wake_up);
+
+static void uacce_cls_release(struct device *dev) { }
+
+/* todo: set the shared vma to VM_SHARE */
 static int uacce_share_mem(struct uacce_queue *q, unsigned long arg)
 {
 	struct uacce_mem_share_arg share;
@@ -302,6 +241,17 @@ static int uacce_fops_open(struct inode *inode, struct file *filep)
 	INIT_LIST_HEAD(&q->share_mem_list);
 	filep->private_data = q;
 
+	if (uacce->ops->start_queue) {
+		ret = uacce->ops->start_queue(q);
+		if (ret)
+			goto err_with_queue;
+	}
+
+	return 0;
+
+err_with_queue:
+	if (uacce->ops->put_queue)
+		uacce->ops->put_queue(q);
 	return ret;
 }
 
@@ -314,15 +264,19 @@ static int uacce_fops_release(struct inode *inode, struct file *filep)
 	struct iommu_domain * domain = iommu_get_domain_for_dev(dev);
 	size_t nr_pages, i;
 
-	WARN_ON(!domain);
+	if (!domain)
+		dev_warn(dev, "dev is running in no iommu mode\n");
 	
-	uacce->ops->stop_queue(q);
+	if (uacce->ops->stop_queue)
+		uacce->ops->stop_queue(q);
 
 	list_for_each_entry_safe(si, si_tmp, &q->share_mem_list, list) {
+		pr_err("there are data?\n");
 		nr_pages = si->size >> PAGE_SHIFT;
 		for (i = 0; i < nr_pages; i++) {
-			iommu_unmap(domain, page_to_pfn(si->pages[i]),
-				    PAGE_SIZE);
+			if (domain)
+				iommu_unmap(domain, page_to_pfn(si->pages[i]),
+					    PAGE_SIZE);
 			SetPageDirty(si->pages[i]);
 			put_page(si->pages[i]); /* todo: accounting */
 		}
@@ -331,7 +285,8 @@ static int uacce_fops_release(struct inode *inode, struct file *filep)
 		free_page((unsigned long)si);
 	}
 
-	uacce->ops->put_queue(q);
+	if (uacce->ops->put_queue)
+		uacce->ops->put_queue(q);
 	
 	/* todo: should I get/put the module or device? */
 	return 0;
@@ -379,6 +334,71 @@ static const struct file_operations uacce_fops = {
 	.poll		= uacce_fops_poll,
 };
 
+/**
+ *	uacce_register - register an accelerator
+ *	@uacce: the accelerator structure
+ */
+int uacce_register(struct uacce *uacce)
+{
+	int ret;
+	struct cdev *cdev;
+
+	if (!uacce->dev)
+		return -ENODEV;
+
+	uacce->dev_id = idr_alloc(&uacce_idr, uacce, 0, 0, GFP_KERNEL);
+	if (uacce->dev_id < 0)
+		return uacce->dev_id;
+
+	uacce->cls_dev.parent = uacce->dev;
+	uacce->cls_dev.class = uacce_class;
+	uacce->cls_dev.release = uacce_cls_release;
+	dev_set_name(&uacce->cls_dev, "%s", dev_name(uacce->dev));
+	ret = device_register(&uacce->cls_dev);
+	if (ret)
+		goto err_with_idr;
+
+	cdev = cdev_alloc();
+	if (!cdev) {
+		ret = -ENOMEM;
+		goto err_with_idr;
+	}
+
+	cdev->ops = &uacce_fops;
+	cdev->owner = uacce->owner;
+	ret = cdev_add(cdev, uacce_devt, 1);
+	if (ret)
+		goto err_with_cdev;
+
+	return 0;
+
+err_with_cdev:
+	cdev_del(cdev);
+err_with_idr:
+	idr_remove(&uacce_idr, uacce->dev_id);
+	return ret;
+}
+EXPORT_SYMBOL_GPL(uacce_register);
+
+/**
+ * uacce_unregister - unregisters a uacce
+ * @uacce: the accelerator to unregister
+ *
+ * Unregister an accelerator that wat previously successully registered with
+ * uacce_register().
+ */
+void uacce_unregister(struct uacce *uacce)
+{
+	mutex_lock(&uacce_mutex);
+
+	idr_remove(&uacce_idr, uacce->dev_id);
+	device_unregister(&uacce->cls_dev);
+
+	mutex_unlock(&uacce_mutex);
+}
+EXPORT_SYMBOL_GPL(uacce_unregister);
+
+
 static int __init uacce_init(void)
 {
 	int ret;
@@ -393,15 +413,10 @@ static int __init uacce_init(void)
 	if (ret)
 		goto err_with_class;
 
-	cdev_init(&uacce_cdev, &uacce_fops);
-	ret = cdev_add(&uacce_cdev, uacce_devt, MINORMASK);
-	if (ret)
-		goto err_with_chrdev_region;
+	pr_info("uacce init with major number:%d\n", MAJOR(uacce_devt));
 
 	return 0;
 
-err_with_chrdev_region:
-	unregister_chrdev_region(uacce_devt, MINORMASK);
 err_with_class:
 	class_destroy(uacce_class);
 err:
@@ -410,6 +425,7 @@ err:
 
 static __exit void uacce_exit(void)
 {
+	unregister_chrdev_region(uacce_devt, MINORMASK);
 	class_destroy(uacce_class);
 	idr_destroy(&uacce_idr);
 }
