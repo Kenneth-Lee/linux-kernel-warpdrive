@@ -28,7 +28,7 @@ struct uacce;
 struct uacce_ops {
 	int (*get_queue)(struct uacce *uacce, unsigned long arg,
 		struct uacce_queue **q);
-	int (*put_queue)(struct uacce_queue *q);
+	void (*put_queue)(struct uacce_queue *q);
 	int (*stop_queue)(struct uacce_queue *q);
 	int (*is_q_updated)(struct uacce_queue *q);
 	void (*mask_notify)(struct uacce_queue *q, int event_mask);
@@ -45,7 +45,6 @@ struct uacce_queue {
 	struct uacce *uacce;
 	int pid;
 	__u32 flags;
-	int flags;
 	void *priv;
 	wait_queue_head_t wait;
 #ifdef CONFIG_IOMMU_SVA
