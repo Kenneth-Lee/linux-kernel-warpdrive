@@ -10,8 +10,8 @@
 #include <fcntl.h>
 #include <stdint.h>
 #include <unistd.h>
-#include "../../include/uapi/linux/vfio.h"
-#include "../../include/uapi/linux/vfio_spimdev.h"
+#include <limits.h>
+#include "../../include/uapi/linux/uacce.h"
 
 #define SYS_VAL_SIZE		16
 #define PATH_STR_SIZE 		256
@@ -126,10 +126,7 @@ struct wd_queue {
 	int fd;
 	int pasid;
 	int iommu_type;
-	char *vfio_group_path;
-	char *iommu_ext_path;
-	char *dmaflag_ext_path;
-	char *device_api_path;
+	char *dev_path;
 };
 
 extern int wd_request_queue(struct wd_queue *q);

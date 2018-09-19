@@ -47,11 +47,7 @@ int hizip_deflate(FILE *source, FILE *dest,  int type)
 	int fd, file_msize;
 
 	q.container = -1;
-	q.mdev_name = "22e09922-7a82-11e8-9cf6-d74cffa9e87b";
-	q.vfio_group_path = "/dev/vfio/7"; //fixme to the right path
-	q.iommu_ext_path = "/sys/class/spimdev/0000:75:00.0/device/params/iommu_type";
-	q.dmaflag_ext_path = "/sys/class/spimdev/0000:75:00.0/device/params/dma_flag";
-	q.device_api_path = "/sys/class/spimdev/0000:75:00.0/device/mdev_supported_types/hisi_zip-hisi_zip/device_api";
+	q.dev_path = "/dev/ua1";
 	ret = wd_request_queue(&q);
 	SYS_ERR_COND(ret, "wd_request_queue");
 

@@ -16,168 +16,20 @@
 #include "wd.h"
 #include "wd_adapter.h"
 
-#if (defined(HAVE_SVA) & HAVE_SVA)
-static int _wd_bind_process(struct wd_queue *q)
-{
-	struct bind_data {
-		struct vfio_iommu_type1_bind bind;
-		struct vfio_iommu_type1_bind_process data;
-	} wd_bind;
-	int ret;
-	__u32 flags = 0;
-
-	if (q->dma_flag & VFIO_SPIMDEV_DMA_MULTI_PROC_MAP)
-		flags = VFIO_IOMMU_BIND_PRIV;
-	else if (q->dma_flag & VFIO_SPIMDEV_DMA_SVM_NO_FAULT)
-		flags = VFIO_IOMMU_BIND_NOPF;
-
-	wd_bind.bind.flags = VFIO_IOMMU_BIND_PROCESS;
-	wd_bind.bind.argsz = sizeof(wd_bind);
-	wd_bind.data.flags = flags;
-	ret = ioctl(q->container, VFIO_IOMMU_BIND, &wd_bind);
-	if (ret)
-		return ret;
-	q->pasid = wd_bind.data.pasid;
-	return ret;
-}
-
-static int _wd_unbind_process(struct wd_queue *q)
-{
-	struct bind_data {
-		struct vfio_iommu_type1_bind bind;
-		struct vfio_iommu_type1_bind_process data;
-	} wd_bind;
-	__u32 flags = 0;
-
-	if (q->dma_flag & VFIO_SPIMDEV_DMA_MULTI_PROC_MAP)
-		flags = VFIO_IOMMU_BIND_PRIV;
-	else if (q->dma_flag & VFIO_SPIMDEV_DMA_SVM_NO_FAULT)
-		flags = VFIO_IOMMU_BIND_NOPF;
-
-	wd_bind.bind.flags = VFIO_IOMMU_BIND_PROCESS;
-	wd_bind.data.pasid = q->pasid;
-	wd_bind.data.flags = flags;
-	wd_bind.bind.argsz = sizeof(wd_bind);
-
-	return ioctl(q->container, VFIO_IOMMU_UNBIND, &wd_bind);
-}
-#endif
-
 int wd_request_queue(struct wd_queue *q)
 {
-	struct vfio_group_status group_status = {
-		.argsz = sizeof(group_status) };
-	int iommu_ext;
 	int ret;
 
-	if (!q->vfio_group_path ||
-		!q->device_api_path ||
-		!q->iommu_ext_path) {
-		WD_ERR("please set vfio_group_path,"
-		"device_api_path,and iommu_ext_path before call %s", __func__);
-		return -EINVAL;
-	}
-
-	q->hw_type_id = 0; /* this can be set according to the device api_version in the future */
-
-	q->group = open(q->vfio_group_path, O_RDWR);
-	if (q->group < 0) {
-		WD_ERR("open vfio group(%s) fail, errno=%d\n",
-			q->vfio_group_path, errno);
-		return -errno;
-	}
-
-	if (q->container <= 0) {
-		q->container = open("/dev/vfio/vfio", O_RDWR);
-		if (q->container < 0) {
-			WD_ERR("Create VFIO container fail!\n");
-			ret = -ENODEV;
-			goto err_with_group;
-		}
-	}
-
-	if (ioctl(q->container, VFIO_GET_API_VERSION) != VFIO_API_VERSION) {
-		WD_ERR("VFIO version check fail!\n");
-		ret = -EINVAL;
-		goto err_with_container;
-	}
-
-	q->dma_flag = _get_attr_int(q->dmaflag_ext_path);
-	if (q->dma_flag < 0) {
-		ret = q->dma_flag;
-		goto err_with_container;
-	}
-
-	iommu_ext = _get_attr_int(q->iommu_ext_path);
-	if (iommu_ext < 0) {
-		ret = iommu_ext;
-		goto err_with_container;
-	}
-	ret = ioctl(q->container, VFIO_CHECK_EXTENSION, iommu_ext);
-	if (!ret) {
-		WD_ERR("VFIO iommu check (%d) fail (%d)!\n", iommu_ext, ret);
-		goto err_with_container;
-	}
-
-	ret = _get_attr_str(q->device_api_path, q->hw_type);
-	if (ret)
-		goto err_with_container;
-
-	ret = ioctl(q->group, VFIO_GROUP_GET_STATUS, &group_status);
-	if (!(group_status.flags & VFIO_GROUP_FLAGS_VIABLE)) {
-		WD_ERR("VFIO group is not viable\n");
-		goto err_with_container;
-	}
-
-	ret = ioctl(q->group, VFIO_GROUP_SET_CONTAINER, &q->container);
-	if (ret) {
-		WD_ERR("VFIO group fail on VFIO_GROUP_SET_CONTAINER\n");
-		goto err_with_container;
-	}
-
-	ret = ioctl(q->container, VFIO_SET_IOMMU, iommu_ext);
-	if (ret) {
-		WD_ERR("VFIO fail on VFIO_SET_IOMMU(%d)\n", iommu_ext);
-		goto err_with_container;
-	}
-
-	q->mdev = ioctl(q->group, VFIO_GROUP_GET_DEVICE_FD, q->mdev_name);
-	if (q->mdev < 0) {
-		WD_ERR("VFIO fail on VFIO_GROUP_GET_DEVICE_FD (%d)\n", q->mdev);
-		ret = q->mdev;
-		goto err_with_container;
-	}
-#if (defined(HAVE_SVA) & HAVE_SVA)
-	if (!(q->dma_flag & (VFIO_SPIMDEV_DMA_PHY | VFIO_SPIMDEV_DMA_SINGLE_PROC_MAP))) {
-		ret = _wd_bind_process(q);
-		if (ret) {
-			close(q->mdev);
-			WD_ERR("VFIO fails to bind process!\n");
-			goto err_with_container;
-
-		}
-	}
-#endif
-	ret = q->fd = ioctl(q->mdev, VFIO_SPIMDEV_CMD_GET_Q, (unsigned long)q->pasid);
-	if (ret < 0) {
-		WD_ERR("get queue fail,ret=%d\n", errno);
-		goto err_with_mdev;
-	}
+	q->fd = open(q->dev_path, O_RDWR | O_CLOEXEC);
 
 	ret = drv_open(q);
 	if (ret)
-		goto err_with_queue;
+		goto err_with_fd;
 
 	return 0;
 
-err_with_queue:
+err_with_fd:
 	close(q->fd);
-err_with_mdev:
-	close(q->mdev);
-err_with_container:
-	close(q->container);
-err_with_group:
-	close(q->group);
 	return ret;
 }
 
@@ -185,21 +37,6 @@ void wd_release_queue(struct wd_queue *q)
 {
 	drv_close(q);
 	close(q->fd);
-#if (defined(HAVE_SVA) & HAVE_SVA)
-	if (!(q->dma_flag & (VFIO_SPIMDEV_DMA_PHY | VFIO_SPIMDEV_DMA_SINGLE_PROC_MAP))) {
-		if (q->pasid <= 0) {
-			WD_ERR("Wd queue pasid ! pasid=%d\n", q->pasid);
-			return;
-		}
-		if (_wd_unbind_process(q)) {
-			WD_ERR("VFIO fails to unbind process!\n");
-			return;
-		}
-	}
-#endif
-	close(q->mdev);
-	close(q->container);
-	close(q->group);
 }
 
 int wd_send(struct wd_queue *q, void *req)
@@ -257,69 +94,21 @@ void wd_flush(struct wd_queue *q)
 	drv_flush(q);
 }
 
-static int _wd_mem_share_type1(struct wd_queue *q, const void *addr,
-			       size_t size, int flags)
-{
-	struct vfio_iommu_type1_dma_map dma_map;
-
-	if (q->dma_flag & VFIO_SPIMDEV_DMA_SVM_NO_FAULT)
-		return mlock(addr, size);
-
-#if (defined(HAVE_SVA) & HAVE_SVA)
-	else if ((q->dma_flag & VFIO_SPIMDEV_DMA_MULTI_PROC_MAP) &&
-		 (q->pasid > 0))
-		dma_map.pasid = q->pasid;
-#endif
-	else if ((q->dma_flag & VFIO_SPIMDEV_DMA_SINGLE_PROC_MAP))
-		; //todo
-	else
-		return -1;
-
-	dma_map.vaddr = (__u64)addr;
-	dma_map.size = size;
-	dma_map.iova = (__u64)addr;
-	dma_map.flags =
-		VFIO_DMA_MAP_FLAG_READ | VFIO_DMA_MAP_FLAG_WRITE | flags;
-	dma_map.argsz = sizeof(dma_map);
-
-	return ioctl(q->container, VFIO_IOMMU_MAP_DMA, &dma_map);
-}
-
-static void _wd_mem_unshare_type1(struct wd_queue *q, const void *addr,
-				  size_t size)
-{
-#if (defined(HAVE_SVA) & HAVE_SVA)
-	struct vfio_iommu_type1_dma_unmap dma_unmap;
-#endif
-
-	if (q->dma_flag & VFIO_SPIMDEV_DMA_SVM_NO_FAULT) {
-		(void)munlock(addr, size);
-		return;
-	}
-
-#if (defined(HAVE_SVA) & HAVE_SVA)
-	dma_unmap.iova = (__u64)addr;
-	if ((q->dma_flag & VFIO_SPIMDEV_DMA_MULTI_PROC_MAP) && (q->pasid > 0))
-		dma_unmap.flags = 0;
-		dma_unmap.size = size;
-		dma_unmap.argsz = sizeof(dma_unmap);
-		ioctl(q->container, VFIO_IOMMU_UNMAP_DMA, &dma_unmap);
-#endif
-}
-
 int wd_mem_share(struct wd_queue *q, const void *addr, size_t size, int flags)
 {
-	if (drv_can_do_mem_share(q))
-		return drv_share(q, addr, size, flags);
-	else
-		return _wd_mem_share_type1(q, addr, size, flags);
+	struct uacce_mem_share_arg si;
+
+	si.vaddr = (__u64)addr;
+	si.size = (__u64)size;
+	return ioctl(q->fd, UACCE_CMD_SHARE_MEM, &si);
 }
 
 void wd_mem_unshare(struct wd_queue *q, const void *addr, size_t size)
 {
-	if (drv_can_do_mem_share(q))
-		drv_unshare(q, addr, size);
-	else
-		_wd_mem_unshare_type1(q, addr, size);
+	struct uacce_mem_share_arg si;
+
+	si.vaddr = (__u64)addr;
+	si.size = (__u64)size;
+	ioctl(q->fd, UACCE_CMD_UNSHARE_MEM, &si);
 }
 
