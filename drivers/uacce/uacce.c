@@ -346,9 +346,13 @@ int uacce_register(struct uacce *uacce)
 	if (!uacce->dev)
 		return -ENODEV;
 
+	mutex_lock(&uacce_mutex);
+
 	uacce->dev_id = idr_alloc(&uacce_idr, uacce, 0, 0, GFP_KERNEL);
-	if (uacce->dev_id < 0)
-		return uacce->dev_id;
+	if (uacce->dev_id < 0) {
+		ret = uacce->dev_id;
+		goto err_with_lock;
+	}
 
 	uacce->cls_dev.parent = uacce->dev;
 	uacce->cls_dev.class = uacce_class;
@@ -370,12 +374,15 @@ int uacce_register(struct uacce *uacce)
 	if (ret)
 		goto err_with_cdev;
 
+	mutex_unlock(&uacce_mutex);
 	return 0;
 
 err_with_cdev:
 	cdev_del(cdev);
 err_with_idr:
 	idr_remove(&uacce_idr, uacce->dev_id);
+err_with_lock:
+	mutex_unlock(&uacce_mutex);
 	return ret;
 }
 EXPORT_SYMBOL_GPL(uacce_register);
