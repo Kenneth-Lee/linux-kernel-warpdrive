@@ -8,3 +8,11 @@ menuconfig UACCE
 	  See Documentation/warpdrive/warpdrive.rst for more details.
 
 	  If you don't know what to do here, say N.
+
+config WD_DUMMY_DEV
+	tristate "Support for WrapDrive Dummy Device"
+	depends on UACCE
+	help
+	  Support for WarpDrive test driver with devices (NOT for upstream).
+
+	  If you don't know what to do here, say N.
