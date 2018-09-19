@@ -330,6 +330,42 @@
          d="M 0.42024733,0.42806444 10.231357,6.3500844 0.24347733,11.918544"
          style="fill:none;fill-rule:evenodd;stroke:#000000;stroke-width:1px;stroke-linecap:butt;stroke-linejoin:miter;stroke-opacity:1" />
     </marker>
+    <linearGradient
+       inkscape:collect="always"
+       xlink:href="#linearGradient5026"
+       id="linearGradient5032-3-9-7-3"
+       x1="353"
+       y1="211.3622"
+       x2="565.5"
+       y2="174.8622"
+       gradientUnits="userSpaceOnUse"
+       gradientTransform="matrix(1.3742742,0,0,0.97786395,-57.357186,649.55786)" />
+    <filter
+       inkscape:collect="always"
+       style="color-interpolation-filters:sRGB"
+       id="filter4169-3-5-8-5-0"
+       x="-0.031597666"
+       width="1.0631953"
+       y="-0.099812768"
+       height="1.1996255">
+      <feGaussianBlur
+         inkscape:collect="always"
+         stdDeviation="1.3307599"
+         id="feGaussianBlur4171-6-3-9-0-2" />
+    </filter>
+    <marker
+       markerWidth="11.227358"
+       markerHeight="12.355258"
+       refX="10"
+       refY="6.177629"
+       orient="auto"
+       id="marker4825-6-2-1-1">
+      <path
+         inkscape:connector-curvature="0"
+         id="path4757-1-9-9-0"
+         d="M 0.42024733,0.42806444 10.231357,6.3500844 0.24347733,11.918544"
+         style="fill:none;fill-rule:evenodd;stroke:#000000;stroke-width:1px;stroke-linecap:butt;stroke-linejoin:miter;stroke-opacity:1" />
+    </marker>
   </defs>
   <sodipodi:namedview
      id="base"
@@ -442,14 +478,14 @@
     <text
        xml:space="preserve"
        style="font-style:normal;font-weight:normal;line-height:0%;font-family:sans-serif;letter-spacing:0px;word-spacing:0px;fill:#000000;fill-opacity:1;stroke:none;stroke-width:1px;stroke-linecap:butt;stroke-linejoin:miter;stroke-opacity:1"
-       x="306.29599"
-       y="746.50073"
+       x="309.13705"
+       y="745.55371"
        id="text4138-6-2-6"><tspan
          sodipodi:role="line"
          id="tspan4140-1-9-1"
-         x="306.29599"
-         y="746.50073"
-         style="font-size:15px;line-height:1.25">spimdev</tspan></text>
+         x="309.13705"
+         y="745.55371"
+         style="font-size:15px;line-height:1.25">uacce</tspan></text>
     <path
        style="fill:none;fill-rule:evenodd;stroke:#000000;stroke-width:1px;stroke-linecap:butt;stroke-linejoin:miter;stroke-opacity:1;marker-end:url(#marker4825-6-2)"
        d="m 329.57309,619.72453 5.0373,97.14447"
@@ -488,50 +524,28 @@
          x="295.67819"
          y="852.98224"
          style="font-size:15px;line-height:1.25">Device Driver</tspan></text>
-    <text
-       xml:space="preserve"
-       style="font-style:normal;font-weight:normal;line-height:0%;font-family:sans-serif;letter-spacing:0px;word-spacing:0px;fill:#000000;fill-opacity:1;stroke:none;stroke-width:1px;stroke-linecap:butt;stroke-linejoin:miter;stroke-opacity:1"
-       x="349.31198"
-       y="829.46118"
-       id="text4138-6-2-6-1-6"><tspan
-         sodipodi:role="line"
-         id="tspan4140-1-9-1-0-3"
-         x="349.31198"
-         y="829.46118"
-         style="font-size:15px;line-height:1.25">*</tspan></text>
-    <text
-       xml:space="preserve"
-       style="font-style:normal;font-weight:normal;line-height:0%;font-family:sans-serif;letter-spacing:0px;word-spacing:0px;fill:#000000;fill-opacity:1;stroke:none;stroke-width:1px;stroke-linecap:butt;stroke-linejoin:miter;stroke-opacity:1"
-       x="349.98282"
-       y="768.698"
-       id="text4138-6-2-6-1-6-2"><tspan
-         sodipodi:role="line"
-         id="tspan4140-1-9-1-0-3-0"
-         x="349.98282"
-         y="768.698"
-         style="font-size:15px;line-height:1.25">1</tspan></text>
     <path
        style="fill:none;fill-rule:evenodd;stroke:#000000;stroke-width:1px;stroke-linecap:butt;stroke-linejoin:miter;stroke-opacity:1;marker-end:url(#marker4825-6-2-6)"
-       d="m 568.1238,614.05402 0.51369,333.80219"
+       d="m 623.05084,615.00104 0.51369,333.80219"
        id="path4661-3-5"
        inkscape:connector-curvature="0"
        sodipodi:nodetypes="cc" />
     <text
        xml:space="preserve"
        style="font-style:normal;font-weight:normal;line-height:0%;font-family:sans-serif;text-align:center;letter-spacing:0px;word-spacing:0px;text-anchor:middle;fill:#000000;fill-opacity:1;stroke:none;stroke-width:1px;stroke-linecap:butt;stroke-linejoin:miter;stroke-opacity:1"
-       x="371.8013"
-       y="664.62476"
+       x="392.63568"
+       y="660.83667"
        id="text4138-6-2-6-1-6-2-5"><tspan
          sodipodi:role="line"
-         x="371.8013"
-         y="664.62476"
-         id="tspan4274"
-         style="font-size:15px;line-height:1.25">&lt;&lt;vfio&gt;&gt;</tspan><tspan
-         sodipodi:role="line"
-         x="371.8013"
-         y="683.37476"
+         x="392.63568"
+         y="660.83667"
          id="tspan4305"
-         style="font-size:15px;line-height:1.25">resource management</tspan></text>
+         style="font-size:15px;line-height:1.25">&lt;&lt;anom_file&gt;&gt;</tspan><tspan
+         sodipodi:role="line"
+         x="392.63568"
+         y="679.58667"
+         style="font-size:15px;line-height:1.25"
+         id="tspan1139">Queue FD</tspan></text>
     <text
        xml:space="preserve"
        style="font-style:normal;font-weight:normal;line-height:0%;font-family:sans-serif;letter-spacing:0px;word-spacing:0px;fill:#000000;fill-opacity:1;stroke:none;stroke-width:1px;stroke-linecap:butt;stroke-linejoin:miter;stroke-opacity:1"
@@ -610,23 +624,14 @@
     <text
        xml:space="preserve"
        style="font-style:normal;font-weight:normal;line-height:0%;font-family:sans-serif;text-align:start;letter-spacing:0px;word-spacing:0px;text-anchor:start;fill:#000000;fill-opacity:1;stroke:none;stroke-width:1px;stroke-linecap:butt;stroke-linejoin:miter;stroke-opacity:1"
-       x="343.81625"
-       y="786.44141"
+       x="259.53165"
+       y="797.8056"
        id="text4138-6-2-6-1-6-2-5-7-5"><tspan
          sodipodi:role="line"
-         x="343.81625"
-         y="786.44141"
+         x="259.53165"
+         y="797.8056"
          style="font-size:15px;line-height:1.25;text-align:start;text-anchor:start"
-         id="tspan2278">regist<tspan
-   style="text-align:start;text-anchor:start"
-   id="tspan2280">er as mdev with &quot;share </tspan></tspan><tspan
-         sodipodi:role="line"
-         x="343.81625"
-         y="805.19141"
-         style="font-size:15px;line-height:1.25;text-align:start;text-anchor:start"
-         id="tspan2357"><tspan
-   style="text-align:start;text-anchor:start"
-   id="tspan2359">parent iommu&quot; attribu</tspan>te</tspan></text>
+         id="tspan2357">uacce register api</tspan></text>
     <text
        xml:space="preserve"
        style="font-style:normal;font-weight:normal;line-height:0%;font-family:sans-serif;letter-spacing:0px;word-spacing:0px;fill:#000000;fill-opacity:1;stroke:none;stroke-width:1px;stroke-linecap:butt;stroke-linejoin:miter;stroke-opacity:1"
@@ -652,19 +657,14 @@
     <text
        xml:space="preserve"
        style="font-style:normal;font-weight:normal;line-height:0%;font-family:sans-serif;text-align:center;letter-spacing:0px;word-spacing:0px;text-anchor:middle;fill:#000000;fill-opacity:1;stroke:none;stroke-width:1px;stroke-linecap:butt;stroke-linejoin:miter;stroke-opacity:1"
-       x="649.09613"
-       y="774.4798"
+       x="615.9505"
+       y="739.44012"
        id="text4138-6-2-6-1-6-2-5-3"><tspan
          sodipodi:role="line"
-         id="tspan4140-1-9-1-0-3-0-4-6"
-         x="649.09613"
-         y="774.4798"
-         style="font-size:15px;line-height:1.25">&lt;&lt;vfio&gt;&gt;</tspan><tspan
-         sodipodi:role="line"
-         x="649.09613"
-         y="793.2298"
+         x="615.9505"
+         y="739.44012"
          id="tspan4274-7"
-         style="font-size:15px;line-height:1.25">Hardware Accessing</tspan></text>
+         style="font-size:15px;line-height:1.25">mmapped memory r/w interface</tspan></text>
     <text
        xml:space="preserve"
        style="font-style:normal;font-weight:normal;line-height:0%;font-family:sans-serif;text-align:center;letter-spacing:0px;word-spacing:0px;text-anchor:middle;fill:#000000;fill-opacity:1;stroke:none;stroke-width:1px;stroke-linecap:butt;stroke-linejoin:miter;stroke-opacity:1"
@@ -703,30 +703,62 @@
     <text
        xml:space="preserve"
        style="font-style:normal;font-weight:normal;line-height:0%;font-family:sans-serif;text-align:center;letter-spacing:0px;word-spacing:0px;text-anchor:middle;fill:#000000;fill-opacity:1;stroke:none;stroke-width:1px;stroke-linecap:butt;stroke-linejoin:miter;stroke-opacity:1"
-       x="543.91455"
+       x="619.67596"
        y="978.22363"
        id="text4138-6-2-6-1-6-2-5-36-3"><tspan
          sodipodi:role="line"
-         x="543.91455"
+         x="619.67596"
          y="978.22363"
          id="tspan4305-3-67"
          style="font-size:15px;line-height:1.25">Device(Hardware)</tspan></text>
     <path
        style="fill:none;fill-rule:evenodd;stroke:#000000;stroke-width:1px;stroke-linecap:butt;stroke-linejoin:miter;stroke-opacity:1;marker-end:url(#marker4825-6-2-6-2)"
-       d="m 347.51164,865.4527 153.19752,91.52439"
+       d="m 347.51164,865.4527 193.91929,99.10053"
        id="path4661-3-5-1"
+       inkscape:connector-curvature="0"
+       sodipodi:nodetypes="cc" />
+    <rect
+       style="fill:#000000;stroke:#000000;stroke-width:0.6465112;filter:url(#filter4169-3-5-8-5-0)"
+       id="rect4136-3-6-5-7-3-1"
+       width="101.07784"
+       height="31.998148"
+       x="128.74678"
+       y="80.648842"
+       transform="matrix(1.3742742,0,0,0.97786395,278.26025,749.50952)" />
+    <rect
+       style="fill:url(#linearGradient5032-3-9-7-3);fill-opacity:1;stroke:#000000;stroke-width:0.74946606"
+       id="rect4136-2-6-3-6-0"
+       width="138.90868"
+       height="31.289839"
+       x="453.30197"
+       y="826.36682" />
+    <text
+       xml:space="preserve"
+       style="font-style:normal;font-weight:normal;font-size:12px;line-height:0%;font-family:sans-serif;letter-spacing:0px;word-spacing:0px;fill:#000000;fill-opacity:1;stroke:none;stroke-width:1px;stroke-linecap:butt;stroke-linejoin:miter;stroke-opacity:1"
+       x="493.68158"
+       y="847.90643"
+       id="text4138-6-2-6-1-5"><tspan
+         sodipodi:role="line"
+         id="tspan4140-1-9-1-0-1"
+         x="493.68158"
+         y="847.90643"
+         style="font-size:15px;line-height:1.25;stroke-width:1px">IOMMU</tspan></text>
+    <path
+       style="fill:none;fill-rule:evenodd;stroke:#000000;stroke-width:1px;stroke-linecap:butt;stroke-linejoin:miter;stroke-opacity:1;marker-end:url(#marker4825-6-2-1-1)"
+       d="m 389.49372,755.46667 111.75324,68.4507"
+       id="path4661-3-4-85"
        inkscape:connector-curvature="0"
        sodipodi:nodetypes="cc" />
     <text
        xml:space="preserve"
-       style="font-style:normal;font-weight:normal;font-size:12px;line-height:0%;font-family:sans-serif;letter-spacing:0px;word-spacing:0px;fill:#000000;fill-opacity:1;stroke:none;stroke-width:1px;stroke-linecap:butt;stroke-linejoin:miter;stroke-opacity:1"
-       x="343.6398"
-       y="716.47754"
-       id="text4138-6-2-6-1-6-2-5-7-5-2-6"><tspan
+       style="font-style:normal;font-weight:normal;font-size:12px;line-height:0%;font-family:sans-serif;text-align:start;letter-spacing:0px;word-spacing:0px;text-anchor:start;fill:#000000;fill-opacity:1;stroke:none;stroke-width:1px;stroke-linecap:butt;stroke-linejoin:miter;stroke-opacity:1"
+       x="427.70282"
+       y="776.91418"
+       id="text4138-6-2-6-1-6-2-5-7-5-0"><tspan
          sodipodi:role="line"
-         x="343.6398"
-         y="716.47754"
-         id="tspan4301-4"
-         style="font-style:italic;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:15px;line-height:1.25;font-family:sans-serif;-inkscape-font-specification:'sans-serif Italic';stroke-width:1px">Share Parent's IOMMU mdev</tspan></text>
+         x="427.70282"
+         y="776.91418"
+         style="font-size:15px;line-height:1.25;text-align:start;text-anchor:start;stroke-width:1px"
+         id="tspan2357-6">manage the driver iommu state</tspan></text>
   </g>
 </svg>
