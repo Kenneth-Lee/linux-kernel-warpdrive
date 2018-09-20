@@ -443,6 +443,8 @@ static void iommu_notifier_release(struct mmu_notifier *mn, struct mm_struct *mm
 			dev_WARN(bond->dev, "possible leak of PASID %u",
 				 io_mm->pasid);
 
+		iopf_queue_flush_dev(bond->dev, io_mm->pasid);
+
 		spin_lock(&iommu_sva_lock);
 		next = list_next_entry(bond, mm_head);
 
@@ -590,6 +592,12 @@ int __iommu_sva_unbind_device(struct device *dev, int pasid)
 		goto out_unlock;
 	}
 
+	/*
+	 * Caller stopped the device from issuing PASIDs, now make sure they are
+	 * out of the fault queue.
+	 */
+	iopf_queue_flush_dev(dev, pasid);
+
 	/* spin_lock_irq matches the one in wait_event_lock_irq */
 	spin_lock_irq(&iommu_sva_lock);
 	list_for_each_entry(bond, &param->mm_list, dev_head) {
@@ -614,6 +622,8 @@ static void __iommu_sva_unbind_device_all(struct device *dev)
 
 	if (!param)
 		return;
+
+	iopf_queue_flush_dev(dev, IOMMU_PASID_INVALID);
 
 	spin_lock_irq(&iommu_sva_lock);
 	list_for_each_entry_safe(bond, next, &param->mm_list, dev_head)
@@ -680,6 +690,9 @@ EXPORT_SYMBOL_GPL(iommu_sva_find);
  * overrides it. Similarly, @min_pasid overrides the lower PASID limit supported
  * by the IOMMU.
  *
+ * If the device should support recoverable I/O Page Faults (e.g. PCI PRI), the
+ * IOMMU_SVA_FEAT_IOPF feature must be requested.
+ *
  * @mm_exit is called when an address space bound to the device is about to be
  * torn down by exit_mmap. After @mm_exit returns, the device must not issue any
  * more transaction with the PASID given as argument. The handler gets an opaque
@@ -707,7 +720,7 @@ int iommu_sva_init_device(struct device *dev, unsigned long features,
 	if (!domain || !domain->ops->sva_init_device)
 		return -ENODEV;
 
-	if (features)
+	if (features & ~IOMMU_SVA_FEAT_IOPF)
 		return -EINVAL;
 
 	param = kzalloc(sizeof(*param), GFP_KERNEL);
@@ -734,10 +747,20 @@ int iommu_sva_init_device(struct device *dev, unsigned long features,
 	if (ret)
 		goto err_unlock;
 
+	if (features & IOMMU_SVA_FEAT_IOPF) {
+		ret = iommu_register_device_fault_handler(dev, iommu_queue_iopf,
+							  dev);
+		if (ret)
+			goto err_shutdown;
+	}
+
 	dev->iommu_param->sva_param = param;
 	mutex_unlock(&dev->iommu_param->sva_lock);
 	return 0;
 
+err_shutdown:
+	if (domain->ops->sva_shutdown_device)
+		domain->ops->sva_shutdown_device(dev);
 err_unlock:
 	mutex_unlock(&dev->iommu_param->sva_lock);
 	kfree(param);
@@ -766,6 +789,7 @@ void iommu_sva_shutdown_device(struct device *dev)
 		goto out_unlock;
 
 	__iommu_sva_unbind_device_all(dev);
+	iommu_unregister_device_fault_handler(dev);
 
 	if (domain->ops->sva_shutdown_device)
 		domain->ops->sva_shutdown_device(dev);

@@ -65,6 +65,8 @@ typedef int (*iommu_mm_exit_handler_t)(struct device *dev, int pasid, void *);
 
 #define IOMMU_PASID_INVALID		(-1)
 
+#define IOMMU_SVA_FEAT_IOPF		(1 << 0)
+
 struct iommu_domain_geometry {
 	dma_addr_t aperture_start; /* First address that can be mapped    */
 	dma_addr_t aperture_end;   /* Last address that can be mapped     */
