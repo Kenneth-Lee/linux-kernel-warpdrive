@@ -248,11 +248,15 @@ struct iommu_sva_param {
  * @mm_invalidate: Invalidate a range of mappings for an mm
  * @map: map a physically contiguous memory region to an iommu domain
  * @unmap: unmap a physically contiguous memory region from an iommu domain
+ * @sva_map: map a physically contiguous memory region to an address space
+ * @sva_unmap: unmap a physically contiguous memory region from an address space
  * @flush_tlb_all: Synchronously flush all hardware TLBs for this domain
  * @tlb_range_add: Add a given iova range to the flush queue for this domain
+ * @sva_iotlb_range_add: Add a given iova range to the flush queue for this mm
  * @tlb_sync: Flush all queued ranges from the hardware TLBs and empty flush
  *            queue
  * @iova_to_phys: translate iova to physical address
+ * @sva_iova_to_phys: translate iova to physical address
  * @add_device: add device to iommu grouping
  * @remove_device: remove device from iommu grouping
  * @device_group: find iommu group for a particular device
@@ -298,11 +302,21 @@ struct iommu_ops {
 		   phys_addr_t paddr, size_t size, int prot);
 	size_t (*unmap)(struct iommu_domain *domain, unsigned long iova,
 		     size_t size);
+	int (*sva_map)(struct iommu_domain *domain, struct io_mm *io_mm,
+		       unsigned long iova, phys_addr_t paddr, size_t size,
+		       int prot);
+	size_t (*sva_unmap)(struct iommu_domain *domain, struct io_mm *io_mm,
+			    unsigned long iova, size_t size);
 	void (*flush_iotlb_all)(struct iommu_domain *domain);
 	void (*iotlb_range_add)(struct iommu_domain *domain,
 				unsigned long iova, size_t size);
+	void (*sva_iotlb_range_add)(struct iommu_domain *domain,
+				    struct io_mm *io_mm, unsigned long iova,
+				    size_t size);
 	void (*iotlb_sync)(struct iommu_domain *domain);
 	phys_addr_t (*iova_to_phys)(struct iommu_domain *domain, dma_addr_t iova);
+	phys_addr_t (*sva_iova_to_phys)(struct iommu_domain *domain,
+					struct io_mm *io_mm, dma_addr_t iova);
 	int (*add_device)(struct device *dev);
 	void (*remove_device)(struct device *dev);
 	struct iommu_group *(*device_group)(struct device *dev);
@@ -525,14 +539,27 @@ extern int iommu_sva_invalidate(struct iommu_domain *domain,
 		struct device *dev, struct tlb_invalidate_info *inv_info);
 
 extern struct iommu_domain *iommu_get_domain_for_dev(struct device *dev);
+extern int __iommu_map(struct iommu_domain *domain, struct io_mm *io_mm,
+		       unsigned long iova, phys_addr_t paddr, size_t size,
+		       int prot);
 extern int iommu_map(struct iommu_domain *domain, unsigned long iova,
 		     phys_addr_t paddr, size_t size, int prot);
+extern size_t __iommu_unmap(struct iommu_domain *domain, struct io_mm *io_mm,
+			    unsigned long iova, size_t size, bool sync);
 extern size_t iommu_unmap(struct iommu_domain *domain, unsigned long iova,
 			  size_t size);
 extern size_t iommu_unmap_fast(struct iommu_domain *domain,
 			       unsigned long iova, size_t size);
-extern size_t iommu_map_sg(struct iommu_domain *domain, unsigned long iova,
-			   struct scatterlist *sg,unsigned int nents, int prot);
+extern size_t __iommu_map_sg(struct iommu_domain *domain, struct io_mm *io_mm,
+			     unsigned long iova, struct scatterlist *sg,
+			     unsigned int nents, int prot);
+static inline size_t iommu_map_sg(struct iommu_domain *domain,
+				  unsigned long iova,
+				  struct scatterlist *sg, unsigned int nents,
+				  int prot)
+{
+	return __iommu_map_sg(domain, NULL, iova, sg, nents, prot);
+}
 extern phys_addr_t iommu_iova_to_phys(struct iommu_domain *domain, dma_addr_t iova);
 extern void iommu_set_fault_handler(struct iommu_domain *domain,
 			iommu_fault_handler_t handler, void *token);
@@ -693,10 +720,23 @@ static inline struct iommu_domain *iommu_get_domain_for_dev(struct device *dev)
 	return NULL;
 }
 
+static inline int __iommu_map(struct iommu_domain *domain, struct io_mm *io_mm,
+			      unsigned long iova, phys_addr_t paddr,
+			      size_t size, int prot)
+{
+	return -ENODEV;
+}
+
 static inline int iommu_map(struct iommu_domain *domain, unsigned long iova,
 			    phys_addr_t paddr, size_t size, int prot)
 {
 	return -ENODEV;
+}
+
+static inline size_t __iommu_unmap(struct iommu_domain *domain, struct io_mm *io_mm,
+				   unsigned long iova, size_t size, bool sync)
+{
+	return 0;
 }
 
 static inline size_t iommu_unmap(struct iommu_domain *domain,
@@ -1003,6 +1043,23 @@ extern int __iommu_sva_unbind_device(struct device *dev, int pasid);
 extern void iommu_sva_unbind_device_all(struct device *dev);
 extern struct mm_struct *iommu_sva_find(int pasid);
 
+int iommu_sva_alloc_pasid(struct device *dev, struct io_mm **io_mm);
+void iommu_sva_free_pasid(struct device *dev, struct io_mm *io_mm);
+
+int iommu_sva_map(struct iommu_domain *domain, struct io_mm *io_mm,
+		  unsigned long iova, phys_addr_t paddr, size_t size, int prot);
+size_t iommu_sva_map_sg(struct iommu_domain *domain, struct io_mm *io_mm,
+			unsigned long iova, struct scatterlist *sg,
+			unsigned int nents, int prot);
+size_t iommu_sva_unmap(struct iommu_domain *domain,
+		       struct io_mm *io_mm, unsigned long iova, size_t size);
+size_t iommu_sva_unmap_fast(struct iommu_domain *domain, struct io_mm *io_mm,
+			    unsigned long iova, size_t size);
+phys_addr_t iommu_sva_iova_to_phys(struct iommu_domain *domain,
+				   struct io_mm *io_mm, dma_addr_t iova);
+void iommu_sva_tlb_range_add(struct iommu_domain *domain, struct io_mm *io_mm,
+			     unsigned long iova, size_t size);
+
 #else /* CONFIG_IOMMU_SVA */
 static inline int iommu_sva_init_device(struct device *dev,
 					unsigned long features,
@@ -1036,6 +1093,57 @@ static inline void iommu_sva_unbind_device_all(struct device *dev)
 static inline struct mm_struct *iommu_sva_find(int pasid)
 {
 	return NULL;
+}
+
+static inline int iommu_sva_alloc_pasid(struct device *dev, struct io_mm **io_mm)
+{
+	return -ENODEV;
+}
+
+static inline void iommu_sva_free_pasid(struct io_mm *io_mm, struct device *dev)
+{
+}
+
+static inline int iommu_sva_map(struct iommu_domain *domain,
+				struct io_mm *io_mm, unsigned long iova,
+				phys_addr_t paddr, size_t size, int prot)
+{
+	return -EINVAL;
+}
+
+static inline size_t iommu_sva_map_sg(struct iommu_domain *domain,
+				      struct io_mm *io_mm, unsigned long iova,
+				      struct scatterlist *sg,
+				      unsigned int nents, int prot)
+{
+	return 0;
+}
+
+static inline size_t iommu_sva_unmap(struct iommu_domain *domain,
+				     struct io_mm *io_mm, unsigned long iova,
+				     size_t size)
+{
+	return 0;
+}
+
+static inline size_t iommu_sva_unmap_fast(struct iommu_domain *domain,
+					  struct io_mm *io_mm,
+					  unsigned long iova, size_t size)
+{
+	return 0;
+}
+
+static inline phys_addr_t iommu_sva_iova_to_phys(struct iommu_domain *domain,
+						 struct io_mm *io_mm,
+						 dma_addr_t iova)
+{
+	return 0;
+}
+
+static inline void iommu_sva_tlb_range_add(struct iommu_domain *domain,
+					   struct io_mm *io_mm,
+					   unsigned long iova, size_t size)
+{
 }
 #endif /* CONFIG_IOMMU_SVA */
 

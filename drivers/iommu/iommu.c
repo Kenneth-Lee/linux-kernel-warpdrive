@@ -1854,8 +1854,8 @@ static size_t iommu_pgsize(struct iommu_domain *domain,
 	return pgsize;
 }
 
-int iommu_map(struct iommu_domain *domain, unsigned long iova,
-	      phys_addr_t paddr, size_t size, int prot)
+int __iommu_map(struct iommu_domain *domain, struct io_mm *io_mm,
+		unsigned long iova, phys_addr_t paddr, size_t size, int prot)
 {
 	unsigned long orig_iova = iova;
 	unsigned int min_pagesz;
@@ -1863,7 +1863,8 @@ int iommu_map(struct iommu_domain *domain, unsigned long iova,
 	phys_addr_t orig_paddr = paddr;
 	int ret = 0;
 
-	if (unlikely(domain->ops->map == NULL ||
+	if (unlikely((!io_mm && domain->ops->map == NULL) ||
+		     (io_mm && domain->ops->sva_map == NULL) ||
 		     domain->pgsize_bitmap == 0UL))
 		return -ENODEV;
 
@@ -1892,7 +1893,12 @@ int iommu_map(struct iommu_domain *domain, unsigned long iova,
 		pr_debug("mapping: iova 0x%lx pa %pa pgsize 0x%zx\n",
 			 iova, &paddr, pgsize);
 
-		ret = domain->ops->map(domain, iova, paddr, pgsize, prot);
+		if (io_mm)
+			ret = domain->ops->sva_map(domain, io_mm, iova, paddr,
+						   pgsize, prot);
+		else
+			ret = domain->ops->map(domain, iova, paddr, pgsize,
+					       prot);
 		if (ret)
 			break;
 
@@ -1903,24 +1909,30 @@ int iommu_map(struct iommu_domain *domain, unsigned long iova,
 
 	/* unroll mapping in case something went wrong */
 	if (ret)
-		iommu_unmap(domain, orig_iova, orig_size - size);
+		__iommu_unmap(domain, io_mm, orig_iova, orig_size - size, true);
 	else
 		trace_map(orig_iova, orig_paddr, orig_size);
 
 	return ret;
 }
+
+int iommu_map(struct iommu_domain *domain, unsigned long iova,
+	      phys_addr_t paddr, size_t size, int prot)
+{
+	return __iommu_map(domain, NULL, iova, paddr, size, prot);
+}
 EXPORT_SYMBOL_GPL(iommu_map);
 
-static size_t __iommu_unmap(struct iommu_domain *domain,
-			    unsigned long iova, size_t size,
-			    bool sync)
+size_t __iommu_unmap(struct iommu_domain *domain, struct io_mm *io_mm,
+		     unsigned long iova, size_t size, bool sync)
 {
 	const struct iommu_ops *ops = domain->ops;
 	size_t unmapped_page, unmapped = 0;
 	unsigned long orig_iova = iova;
 	unsigned int min_pagesz;
 
-	if (unlikely(ops->unmap == NULL ||
+	if (unlikely((!io_mm && ops->unmap == NULL) ||
+		     (io_mm && ops->sva_unmap == NULL) ||
 		     domain->pgsize_bitmap == 0UL))
 		return 0;
 
@@ -1950,7 +1962,11 @@ static size_t __iommu_unmap(struct iommu_domain *domain,
 	while (unmapped < size) {
 		size_t pgsize = iommu_pgsize(domain, iova, size - unmapped);
 
-		unmapped_page = ops->unmap(domain, iova, pgsize);
+		if (io_mm)
+			unmapped_page = ops->sva_unmap(domain, io_mm, iova,
+						       pgsize);
+		else
+			unmapped_page = ops->unmap(domain, iova, pgsize);
 		if (!unmapped_page)
 			break;
 
@@ -1974,19 +1990,20 @@ static size_t __iommu_unmap(struct iommu_domain *domain,
 size_t iommu_unmap(struct iommu_domain *domain,
 		   unsigned long iova, size_t size)
 {
-	return __iommu_unmap(domain, iova, size, true);
+	return __iommu_unmap(domain, NULL, iova, size, true);
 }
 EXPORT_SYMBOL_GPL(iommu_unmap);
 
 size_t iommu_unmap_fast(struct iommu_domain *domain,
 			unsigned long iova, size_t size)
 {
-	return __iommu_unmap(domain, iova, size, false);
+	return __iommu_unmap(domain, NULL, iova, size, false);
 }
 EXPORT_SYMBOL_GPL(iommu_unmap_fast);
 
-size_t iommu_map_sg(struct iommu_domain *domain, unsigned long iova,
-		    struct scatterlist *sg, unsigned int nents, int prot)
+size_t __iommu_map_sg(struct iommu_domain *domain, struct io_mm *io_mm,
+		      unsigned long iova, struct scatterlist *sg,
+		      unsigned int nents, int prot)
 {
 	struct scatterlist *s;
 	size_t mapped = 0;
@@ -2010,7 +2027,7 @@ size_t iommu_map_sg(struct iommu_domain *domain, unsigned long iova,
 		if (!IS_ALIGNED(s->offset, min_pagesz))
 			goto out_err;
 
-		ret = iommu_map(domain, iova + mapped, phys, s->length, prot);
+		ret = __iommu_map(domain, io_mm, iova + mapped, phys, s->length, prot);
 		if (ret)
 			goto out_err;
 
@@ -2021,12 +2038,12 @@ size_t iommu_map_sg(struct iommu_domain *domain, unsigned long iova,
 
 out_err:
 	/* undo mappings already done */
-	iommu_unmap(domain, iova, mapped);
+	__iommu_unmap(domain, io_mm, iova, mapped, true);
 
 	return 0;
 
 }
-EXPORT_SYMBOL_GPL(iommu_map_sg);
+EXPORT_SYMBOL_GPL(__iommu_map_sg);
 
 int iommu_domain_window_enable(struct iommu_domain *domain, u32 wnd_nr,
 			       phys_addr_t paddr, u64 size, int prot)
