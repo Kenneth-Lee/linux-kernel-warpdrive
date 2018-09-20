@@ -976,7 +976,7 @@ int iommu_report_device_fault(struct device *dev, struct iommu_fault_event *evt)
 	struct iommu_fault_param *fparam;
 
 	/* iommu_param is allocated when device is added to group */
-	if (!dev->iommu_param | !evt)
+	if (!dev->iommu_param || !evt)
 		return -EINVAL;
 	/* we only report device fault if there is a handler registered */
 	mutex_lock(&dev->iommu_param->lock);
