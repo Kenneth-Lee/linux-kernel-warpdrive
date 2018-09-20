@@ -586,6 +586,10 @@ void iommu_fwspec_free(struct device *dev);
 int iommu_fwspec_add_ids(struct device *dev, u32 *ids, int num_ids);
 const struct iommu_ops *iommu_ops_from_fwnode(struct fwnode_handle *fwnode);
 
+extern int iommu_sva_bind_device(struct device *dev, struct mm_struct *mm,
+				int *pasid, unsigned long flags, void *drvdata);
+extern int iommu_sva_unbind_device(struct device *dev, int pasid);
+
 #else /* CONFIG_IOMMU_API */
 
 struct iommu_ops {};
@@ -910,6 +914,18 @@ static inline int iommu_sva_invalidate(struct iommu_domain *domain,
 	return -ENODEV;
 }
 
+static inline int iommu_sva_bind_device(struct device *dev,
+					struct mm_struct *mm, int *pasid,
+					unsigned long flags, void *drvdata)
+{
+	return -ENODEV;
+}
+
+static inline int iommu_sva_unbind_device(struct device *dev, int pasid)
+{
+	return -ENODEV;
+}
+
 #endif /* CONFIG_IOMMU_API */
 
 #ifdef CONFIG_IOMMU_DEBUGFS
@@ -924,6 +940,11 @@ extern int iommu_sva_init_device(struct device *dev, unsigned long features,
 				 unsigned int min_pasid,
 				 unsigned int max_pasid);
 extern void iommu_sva_shutdown_device(struct device *dev);
+extern int __iommu_sva_bind_device(struct device *dev, struct mm_struct *mm,
+				   int *pasid, unsigned long flags,
+				   void *drvdata);
+extern int __iommu_sva_unbind_device(struct device *dev, int pasid);
+extern void iommu_sva_unbind_device_all(struct device *dev);
 #else /* CONFIG_IOMMU_SVA */
 static inline int iommu_sva_init_device(struct device *dev,
 					unsigned long features,
@@ -934,6 +955,22 @@ static inline int iommu_sva_init_device(struct device *dev,
 }
 
 static inline void iommu_sva_shutdown_device(struct device *dev)
+{
+}
+
+static inline int __iommu_sva_bind_device(struct device *dev,
+					  struct mm_struct *mm, int *pasid,
+					  unsigned long flags, void *drvdata)
+{
+	return -ENODEV;
+}
+
+static inline int __iommu_sva_unbind_device(struct device *dev, int pasid)
+{
+	return -ENODEV;
+}
+
+static inline void iommu_sva_unbind_device_all(struct device *dev)
 {
 }
 #endif /* CONFIG_IOMMU_SVA */

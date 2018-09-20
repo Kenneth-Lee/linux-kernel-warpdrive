@@ -8,6 +8,38 @@
 #include <linux/iommu.h>
 #include <linux/slab.h>
 
+int __iommu_sva_bind_device(struct device *dev, struct mm_struct *mm, int *pasid,
+			    unsigned long flags, void *drvdata)
+{
+	return -ENOSYS; /* TODO */
+}
+EXPORT_SYMBOL_GPL(__iommu_sva_bind_device);
+
+int __iommu_sva_unbind_device(struct device *dev, int pasid)
+{
+	return -ENOSYS; /* TODO */
+}
+EXPORT_SYMBOL_GPL(__iommu_sva_unbind_device);
+
+static void __iommu_sva_unbind_device_all(struct device *dev)
+{
+	/* TODO */
+}
+
+/**
+ * iommu_sva_unbind_device_all() - Detach all address spaces from this device
+ * @dev: the device
+ *
+ * When detaching @dev from a domain, IOMMU drivers should use this helper.
+ */
+void iommu_sva_unbind_device_all(struct device *dev)
+{
+	mutex_lock(&dev->iommu_param->sva_lock);
+	__iommu_sva_unbind_device_all(dev);
+	mutex_unlock(&dev->iommu_param->sva_lock);
+}
+EXPORT_SYMBOL_GPL(iommu_sva_unbind_device_all);
+
 /**
  * iommu_sva_init_device() - Initialize Shared Virtual Addressing for a device
  * @dev: the device
@@ -95,6 +127,8 @@ void iommu_sva_shutdown_device(struct device *dev)
 	param = dev->iommu_param->sva_param;
 	if (!param)
 		goto out_unlock;
+
+	__iommu_sva_unbind_device_all(dev);
 
 	if (domain->ops->sva_shutdown_device)
 		domain->ops->sva_shutdown_device(dev);
