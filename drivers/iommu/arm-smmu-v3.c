@@ -469,10 +469,15 @@ struct arm_smmu_strtab_l1_desc {
 	dma_addr_t			l2ptr_dma;
 };
 
+struct arm_smmu_mm {
+	struct iommu_pasid_entry	*entry;
+	struct arm_smmu_device		*smmu;
+};
+
 struct arm_smmu_s1_cfg {
 	struct iommu_pasid_table_cfg	tables;
 	struct iommu_pasid_table_ops	*ops;
-	struct iommu_pasid_entry	*cd0; /* Default context */
+	struct arm_smmu_mm		cd0; /* Default context */
 };
 
 struct arm_smmu_s2_cfg {
@@ -1325,56 +1330,47 @@ static void __arm_smmu_tlb_sync(struct arm_smmu_device *smmu)
 	arm_smmu_cmdq_issue_sync(smmu);
 }
 
-static void arm_smmu_tlb_sync(void *cookie)
+static void arm_smmu_tlb_sync_s1(void *cookie)
 {
-	struct arm_smmu_domain *smmu_domain = cookie;
-	__arm_smmu_tlb_sync(smmu_domain->smmu);
+	struct arm_smmu_mm *smmu_mm = cookie;
+	__arm_smmu_tlb_sync(smmu_mm->smmu);
 }
 
-static void arm_smmu_tlb_inv_context(void *cookie)
+static void arm_smmu_tlb_inv_context_s1(void *cookie)
 {
-	struct arm_smmu_domain *smmu_domain = cookie;
-	struct arm_smmu_device *smmu = smmu_domain->smmu;
-	struct arm_smmu_cmdq_ent cmd;
+	struct arm_smmu_mm *smmu_mm = cookie;
+	struct arm_smmu_device *smmu = smmu_mm->smmu;
+	struct arm_smmu_cmdq_ent cmd = {
+		.opcode		= smmu->features & ARM_SMMU_FEAT_E2H ?
+				  CMDQ_OP_TLBI_EL2_ASID : CMDQ_OP_TLBI_NH_ASID,
+	};
 
-	if (smmu_domain->stage == ARM_SMMU_DOMAIN_S1) {
-		if (unlikely(!smmu_domain->s1_cfg.cd0))
-			return;
-		cmd.opcode	= smmu->features & ARM_SMMU_FEAT_E2H ?
-				  CMDQ_OP_TLBI_EL2_ASID : CMDQ_OP_TLBI_NH_ASID;
-		cmd.tlbi.asid	= smmu_domain->s1_cfg.cd0->arch_id;
-		cmd.tlbi.vmid	= 0;
-	} else {
-		cmd.opcode	= CMDQ_OP_TLBI_S12_VMALL;
-		cmd.tlbi.vmid	= smmu_domain->s2_cfg.vmid;
-	}
+	if (unlikely(!smmu_mm->entry))
+		return;
 
+	cmd.tlbi.asid	= smmu_mm->entry->arch_id;
 	arm_smmu_cmdq_issue_cmd(smmu, &cmd);
 	__arm_smmu_tlb_sync(smmu);
 }
 
-static void arm_smmu_tlb_inv_range_nosync(unsigned long iova, size_t size,
-					  size_t granule, bool leaf, void *cookie)
+static void arm_smmu_tlb_inv_range_nosync_s1(unsigned long iova, size_t size,
+					     size_t granule, bool leaf,
+					     void *cookie)
 {
-	struct arm_smmu_domain *smmu_domain = cookie;
-	struct arm_smmu_device *smmu = smmu_domain->smmu;
+	struct arm_smmu_mm *smmu_mm = cookie;
+	struct arm_smmu_device *smmu = smmu_mm->smmu;
 	struct arm_smmu_cmdq_ent cmd = {
+		.opcode	= smmu->features & ARM_SMMU_FEAT_E2H ?
+			  CMDQ_OP_TLBI_EL2_VA : CMDQ_OP_TLBI_NH_VA,
 		.tlbi = {
 			.leaf	= leaf,
 			.addr	= iova,
 		},
 	};
 
-	if (smmu_domain->stage == ARM_SMMU_DOMAIN_S1) {
-		if (unlikely(!smmu_domain->s1_cfg.cd0))
-			return;
-		cmd.opcode	= smmu->features & ARM_SMMU_FEAT_E2H ?
-				  CMDQ_OP_TLBI_EL2_VA : CMDQ_OP_TLBI_NH_VA;
-		cmd.tlbi.asid	= smmu_domain->s1_cfg.cd0->arch_id;
-	} else {
-		cmd.opcode	= CMDQ_OP_TLBI_S2_IPA;
-		cmd.tlbi.vmid	= smmu_domain->s2_cfg.vmid;
-	}
+	if (unlikely(!smmu_mm->entry))
+		return;
+	cmd.tlbi.asid	= smmu_mm->entry->arch_id;
 
 	do {
 		arm_smmu_cmdq_issue_cmd(smmu, &cmd);
@@ -1382,10 +1378,56 @@ static void arm_smmu_tlb_inv_range_nosync(unsigned long iova, size_t size,
 	} while (size -= granule);
 }
 
-static const struct iommu_gather_ops arm_smmu_gather_ops = {
-	.tlb_flush_all	= arm_smmu_tlb_inv_context,
-	.tlb_add_flush	= arm_smmu_tlb_inv_range_nosync,
-	.tlb_sync	= arm_smmu_tlb_sync,
+static void arm_smmu_tlb_sync_s2(void *cookie)
+{
+	struct arm_smmu_domain *smmu_domain = cookie;
+	__arm_smmu_tlb_sync(smmu_domain->smmu);
+}
+
+static void arm_smmu_tlb_inv_context_s2(void *cookie)
+{
+	struct arm_smmu_domain *smmu_domain = cookie;
+	struct arm_smmu_device *smmu = smmu_domain->smmu;
+	struct arm_smmu_cmdq_ent cmd = {
+		.opcode		= CMDQ_OP_TLBI_S12_VMALL,
+		.tlbi.vmid	= smmu_domain->s2_cfg.vmid,
+	};
+
+	arm_smmu_cmdq_issue_cmd(smmu, &cmd);
+	__arm_smmu_tlb_sync(smmu);
+}
+
+static void arm_smmu_tlb_inv_range_nosync_s2(unsigned long iova, size_t size,
+					     size_t granule, bool leaf,
+					     void *cookie)
+{
+	struct arm_smmu_domain *smmu_domain = cookie;
+	struct arm_smmu_device *smmu = smmu_domain->smmu;
+	struct arm_smmu_cmdq_ent cmd = {
+		.opcode	= CMDQ_OP_TLBI_S2_IPA,
+		.tlbi = {
+			.leaf	= leaf,
+			.addr	= iova,
+			.vmid	= smmu_domain->s2_cfg.vmid,
+		},
+	};
+
+	do {
+		arm_smmu_cmdq_issue_cmd(smmu, &cmd);
+		cmd.tlbi.addr += granule;
+	} while (size -= granule);
+}
+
+static const struct iommu_gather_ops arm_smmu_gather_ops_s1 = {
+	.tlb_flush_all	= arm_smmu_tlb_inv_context_s1,
+	.tlb_add_flush	= arm_smmu_tlb_inv_range_nosync_s1,
+	.tlb_sync	= arm_smmu_tlb_sync_s1,
+};
+
+static const struct iommu_gather_ops arm_smmu_gather_ops_s2 = {
+	.tlb_flush_all	= arm_smmu_tlb_inv_context_s2,
+	.tlb_add_flush	= arm_smmu_tlb_inv_range_nosync_s2,
+	.tlb_sync	= arm_smmu_tlb_sync_s2,
 };
 
 /* PASID TABLE API */
@@ -1529,7 +1571,7 @@ static void arm_smmu_domain_free(struct iommu_domain *domain)
 		struct iommu_pasid_table_ops *ops = smmu_domain->s1_cfg.ops;
 
 		if (ops) {
-			iommu_free_pasid_entry(smmu_domain->s1_cfg.cd0);
+			iommu_free_pasid_entry(smmu_domain->s1_cfg.cd0.entry);
 			iommu_free_pasid_ops(ops);
 		}
 	} else {
@@ -1581,7 +1623,8 @@ static int arm_smmu_domain_finalise_s1(struct arm_smmu_domain *smmu_domain,
 
 	cfg->tables	= pasid_cfg;
 	cfg->ops	= ops;
-	cfg->cd0	= entry;
+	cfg->cd0.smmu	= smmu;
+	cfg->cd0.entry	= entry;
 
 	return ret;
 }
@@ -1608,10 +1651,12 @@ static int arm_smmu_domain_finalise(struct iommu_domain *domain,
 				    struct arm_smmu_master_data *master)
 {
 	int ret;
+	void *cookie;
 	unsigned long ias, oas;
 	enum io_pgtable_fmt fmt;
 	struct io_pgtable_cfg pgtbl_cfg;
 	struct io_pgtable_ops *pgtbl_ops;
+	const struct iommu_gather_ops *gather_ops;
 	int (*finalise_stage_fn)(struct arm_smmu_domain *,
 				 struct arm_smmu_master_data *,
 				 struct io_pgtable_cfg *);
@@ -1636,6 +1681,8 @@ static int arm_smmu_domain_finalise(struct iommu_domain *domain,
 		oas = smmu->ias;
 		fmt = ARM_64_LPAE_S1;
 		finalise_stage_fn = arm_smmu_domain_finalise_s1;
+		cookie = &smmu_domain->s1_cfg.cd0;
+		gather_ops = &arm_smmu_gather_ops_s1;
 		break;
 	case ARM_SMMU_DOMAIN_NESTED:
 	case ARM_SMMU_DOMAIN_S2:
@@ -1643,6 +1690,8 @@ static int arm_smmu_domain_finalise(struct iommu_domain *domain,
 		oas = smmu->oas;
 		fmt = ARM_64_LPAE_S2;
 		finalise_stage_fn = arm_smmu_domain_finalise_s2;
+		cookie = smmu_domain;
+		gather_ops = &arm_smmu_gather_ops_s2;
 		break;
 	default:
 		return -EINVAL;
@@ -1652,14 +1701,14 @@ static int arm_smmu_domain_finalise(struct iommu_domain *domain,
 		.pgsize_bitmap	= smmu->pgsize_bitmap,
 		.ias		= ias,
 		.oas		= oas,
-		.tlb		= &arm_smmu_gather_ops,
+		.tlb		= gather_ops,
 		.iommu_dev	= smmu->dev,
 	};
 
 	if (smmu->features & ARM_SMMU_FEAT_COHERENCY)
 		pgtbl_cfg.quirks = IO_PGTABLE_QUIRK_NO_DMA;
 
-	pgtbl_ops = alloc_io_pgtable_ops(fmt, &pgtbl_cfg, smmu_domain);
+	pgtbl_ops = alloc_io_pgtable_ops(fmt, &pgtbl_cfg, cookie);
 	if (!pgtbl_ops)
 		return -ENOMEM;
 
