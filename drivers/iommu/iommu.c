@@ -653,6 +653,7 @@ rename:
 		goto err_free_name;
 	}
 	mutex_init(&dev->iommu_param->lock);
+	mutex_init(&dev->iommu_param->sva_lock);
 
 	kobject_get(group->devices_kobj);
 

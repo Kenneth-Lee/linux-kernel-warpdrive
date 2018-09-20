@@ -197,6 +197,12 @@ struct page_response_msg {
 	u64 private_data;
 };
 
+struct iommu_sva_param {
+	unsigned long features;
+	unsigned int min_pasid;
+	unsigned int max_pasid;
+};
+
 /**
  * struct iommu_ops - iommu ops and capabilities
  * @capable: check capability
@@ -204,6 +210,8 @@ struct page_response_msg {
  * @domain_free: free iommu domain
  * @attach_dev: attach device to an iommu domain
  * @detach_dev: detach device from an iommu domain
+ * @sva_init_device: initialize Shared Virtual Addressing for a device
+ * @sva_shutdown_device: shutdown Shared Virtual Addressing for a device
  * @map: map a physically contiguous memory region to an iommu domain
  * @unmap: unmap a physically contiguous memory region from an iommu domain
  * @flush_tlb_all: Synchronously flush all hardware TLBs for this domain
@@ -239,6 +247,8 @@ struct iommu_ops {
 
 	int (*attach_dev)(struct iommu_domain *domain, struct device *dev);
 	void (*detach_dev)(struct iommu_domain *domain, struct device *dev);
+	int (*sva_init_device)(struct device *dev, struct iommu_sva_param *param);
+	void (*sva_shutdown_device)(struct device *dev);
 	int (*map)(struct iommu_domain *domain, unsigned long iova,
 		   phys_addr_t paddr, size_t size, int prot);
 	size_t (*unmap)(struct iommu_domain *domain, unsigned long iova,
@@ -393,6 +403,9 @@ struct iommu_fault_param {
  * struct iommu_param - collection of per-device IOMMU data
  *
  * @fault_param: IOMMU detected device fault reporting data
+ * @lock: serializes accesses to fault_param
+ * @sva_param: SVA parameters
+ * @sva_lock: serializes accesses to sva_param
  *
  * TODO: migrate other per device data pointers under iommu_dev_data, e.g.
  *	struct iommu_group	*iommu_group;
@@ -401,6 +414,8 @@ struct iommu_fault_param {
 struct iommu_param {
 	struct mutex lock;
 	struct iommu_fault_param *fault_param;
+	struct mutex sva_lock;
+	struct iommu_sva_param *sva_param;
 };
 
 int  iommu_device_register(struct iommu_device *iommu);
@@ -903,5 +918,24 @@ void iommu_debugfs_setup(void);
 #else
 static inline void iommu_debugfs_setup(void) {}
 #endif
+
+#ifdef CONFIG_IOMMU_SVA
+extern int iommu_sva_init_device(struct device *dev, unsigned long features,
+				 unsigned int min_pasid,
+				 unsigned int max_pasid);
+extern void iommu_sva_shutdown_device(struct device *dev);
+#else /* CONFIG_IOMMU_SVA */
+static inline int iommu_sva_init_device(struct device *dev,
+					unsigned long features,
+					unsigned int min_pasid,
+					unsigned int max_pasid)
+{
+	return -ENODEV;
+}
+
+static inline void iommu_sva_shutdown_device(struct device *dev)
+{
+}
+#endif /* CONFIG_IOMMU_SVA */
 
 #endif /* __LINUX_IOMMU_H */
