@@ -99,6 +99,20 @@ struct iommu_domain {
 	void *handler_token;
 	struct iommu_domain_geometry geometry;
 	void *iova_cookie;
+
+	struct list_head mm_list;
+};
+
+struct io_mm {
+	int			pasid;
+	/* IOMMU_SVA_FEAT_* */
+	unsigned long		flags;
+	struct list_head	devices;
+	struct kref		kref;
+	struct mm_struct	*mm;
+
+	/* Release callback for this mm */
+	void (*release)(struct io_mm *io_mm);
 };
 
 enum iommu_cap {
@@ -201,6 +215,7 @@ struct iommu_sva_param {
 	unsigned long features;
 	unsigned int min_pasid;
 	unsigned int max_pasid;
+	struct list_head mm_list;
 };
 
 /**
@@ -212,6 +227,12 @@ struct iommu_sva_param {
  * @detach_dev: detach device from an iommu domain
  * @sva_init_device: initialize Shared Virtual Addressing for a device
  * @sva_shutdown_device: shutdown Shared Virtual Addressing for a device
+ * @mm_alloc: allocate io_mm
+ * @mm_free: free io_mm
+ * @mm_attach: attach io_mm to a device. Install PASID entry if necessary. Must
+ *             not sleep.
+ * @mm_detach: detach io_mm from a device. Remove PASID entry and
+ *             flush associated TLB entries if necessary. Must not sleep.
  * @map: map a physically contiguous memory region to an iommu domain
  * @unmap: unmap a physically contiguous memory region from an iommu domain
  * @flush_tlb_all: Synchronously flush all hardware TLBs for this domain
@@ -249,6 +270,14 @@ struct iommu_ops {
 	void (*detach_dev)(struct iommu_domain *domain, struct device *dev);
 	int (*sva_init_device)(struct device *dev, struct iommu_sva_param *param);
 	void (*sva_shutdown_device)(struct device *dev);
+	struct io_mm *(*mm_alloc)(struct iommu_domain *domain,
+				  struct mm_struct *mm,
+				  unsigned long flags);
+	void (*mm_free)(struct io_mm *io_mm);
+	int (*mm_attach)(struct iommu_domain *domain, struct device *dev,
+			 struct io_mm *io_mm, bool attach_domain);
+	void (*mm_detach)(struct iommu_domain *domain, struct device *dev,
+			  struct io_mm *io_mm, bool detach_domain);
 	int (*map)(struct iommu_domain *domain, unsigned long iova,
 		   phys_addr_t paddr, size_t size, int prot);
 	size_t (*unmap)(struct iommu_domain *domain, unsigned long iova,
