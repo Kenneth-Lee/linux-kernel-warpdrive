@@ -63,6 +63,8 @@ typedef int (*iommu_fault_handler_t)(struct iommu_domain *,
 typedef int (*iommu_dev_fault_handler_t)(struct iommu_fault_event *, void *);
 typedef int (*iommu_mm_exit_handler_t)(struct device *dev, int pasid, void *);
 
+#define IOMMU_PASID_INVALID		(-1)
+
 struct iommu_domain_geometry {
 	dma_addr_t aperture_start; /* First address that can be mapped    */
 	dma_addr_t aperture_end;   /* Last address that can be mapped     */
@@ -441,10 +443,19 @@ struct iommu_fault_param {
 };
 
 /**
+ * iopf_queue_flush_t - Flush low-level page fault queue
+ *
+ * Report all faults currently pending in the low-level page fault queue
+ */
+struct iopf_queue;
+typedef int (*iopf_queue_flush_t)(void *cookie, struct device *dev, int pasid);
+
+/**
  * struct iommu_param - collection of per-device IOMMU data
  *
  * @fault_param: IOMMU detected device fault reporting data
- * @lock: serializes accesses to fault_param
+ * @iopf_param: I/O Page Fault queue and data
+ * @lock: serializes accesses to fault_param and iopf_param
  * @sva_param: SVA parameters
  * @sva_lock: serializes accesses to sva_param
  *
@@ -455,6 +466,7 @@ struct iommu_fault_param {
 struct iommu_param {
 	struct mutex lock;
 	struct iommu_fault_param *fault_param;
+	struct iopf_device_param *iopf_param;
 	struct mutex sva_lock;
 	struct iommu_sva_param *sva_param;
 };
@@ -1024,5 +1036,47 @@ static inline struct mm_struct *iommu_sva_find(int pasid)
 	return NULL;
 }
 #endif /* CONFIG_IOMMU_SVA */
+
+#ifdef CONFIG_IOMMU_PAGE_FAULT
+extern int iommu_queue_iopf(struct iommu_fault_event *evt, void *cookie);
+
+extern int iopf_queue_add_device(struct iopf_queue *queue, struct device *dev);
+extern int iopf_queue_remove_device(struct device *dev);
+extern int iopf_queue_flush_dev(struct device *dev, int pasid);
+extern struct iopf_queue *
+iopf_queue_alloc(const char *name, iopf_queue_flush_t flush, void *cookie);
+extern void iopf_queue_free(struct iopf_queue *queue);
+#else /* CONFIG_IOMMU_PAGE_FAULT */
+static inline int iommu_queue_iopf(struct iommu_fault_event *evt, void *cookie)
+{
+	return -ENODEV;
+}
+
+static inline int iopf_queue_add_device(struct iopf_queue *queue,
+					struct device *dev)
+{
+	return -ENODEV;
+}
+
+static inline int iopf_queue_remove_device(struct device *dev)
+{
+	return -ENODEV;
+}
+
+static inline int iopf_queue_flush_dev(struct device *dev, int pasid)
+{
+	return -ENODEV;
+}
+
+static inline struct iopf_queue *
+iopf_queue_alloc(const char *name, iopf_queue_flush_t flush, void *cookie)
+{
+	return NULL;
+}
+
+static inline void iopf_queue_free(struct iopf_queue *queue)
+{
+}
+#endif /* CONFIG_IOMMU_PAGE_FAULT */
 
 #endif /* __LINUX_IOMMU_H */
