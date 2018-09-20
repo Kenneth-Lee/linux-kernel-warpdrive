@@ -475,6 +475,7 @@ struct arm_smmu_mm {
 	struct io_mm			io_mm;
 	struct iommu_pasid_entry	*entry;
 	struct arm_smmu_device		*smmu;
+	struct io_pgtable_ops		*ops;
 };
 
 struct arm_smmu_s1_cfg {
@@ -1870,6 +1871,18 @@ static int arm_smmu_map(struct iommu_domain *domain, unsigned long iova,
 	return ops->map(ops, iova, paddr, size, prot);
 }
 
+static int arm_smmu_sva_map(struct iommu_domain *domain, struct io_mm *io_mm,
+			    unsigned long iova, phys_addr_t paddr, size_t size,
+			    int prot)
+{
+	struct io_pgtable_ops *ops = to_smmu_mm(io_mm)->ops;
+
+	if (!ops)
+		return -ENODEV;
+
+	return ops->map(ops, iova, paddr, size, prot);
+}
+
 static size_t
 arm_smmu_unmap(struct iommu_domain *domain, unsigned long iova, size_t size)
 {
@@ -1877,6 +1890,19 @@ arm_smmu_unmap(struct iommu_domain *domain, unsigned long iova, size_t size)
 
 	if (!ops)
 		return 0;
+
+	return ops->unmap(ops, iova, size);
+}
+
+static size_t
+arm_smmu_sva_unmap(struct iommu_domain *domain, struct io_mm *io_mm,
+		   unsigned long iova, size_t size)
+{
+	struct arm_smmu_mm *smmu_mm = to_smmu_mm(io_mm);
+	struct io_pgtable_ops *ops = smmu_mm->ops;
+
+	if (!ops)
+	    return 0;
 
 	return ops->unmap(ops, iova, size);
 }
@@ -1896,6 +1922,18 @@ arm_smmu_iova_to_phys(struct iommu_domain *domain, dma_addr_t iova)
 
 	if (domain->type == IOMMU_DOMAIN_IDENTITY)
 		return iova;
+
+	if (!ops)
+		return 0;
+
+	return ops->iova_to_phys(ops, iova);
+}
+
+static phys_addr_t
+arm_smmu_sva_iova_to_phys(struct iommu_domain *domain, struct io_mm *io_mm,
+			  dma_addr_t iova)
+{
+	struct io_pgtable_ops *ops = to_smmu_mm(io_mm)->ops;
 
 	if (!ops)
 		return 0;
@@ -1936,8 +1974,9 @@ static struct io_mm *arm_smmu_mm_alloc(struct iommu_domain *domain,
 	struct iommu_pasid_entry *entry;
 	struct iommu_pasid_table_ops *ops;
 	struct arm_smmu_domain *smmu_domain = to_smmu_domain(domain);
+	struct arm_smmu_device *smmu = smmu_domain->smmu;
 
-	if (flags || !mm)
+	if (flags)
 		return NULL;
 
 	if (smmu_domain->stage != ARM_SMMU_DOMAIN_S1)
@@ -1948,13 +1987,34 @@ static struct io_mm *arm_smmu_mm_alloc(struct iommu_domain *domain,
 		return NULL;
 
 	ops = smmu_domain->s1_cfg.ops;
-	entry = ops->alloc_shared_entry(ops, mm);
+	if (mm) {
+		entry = ops->alloc_shared_entry(ops, mm);
+	} else {
+		enum io_pgtable_fmt fmt = ARM_64_LPAE_S1;
+		struct io_pgtable_cfg cfg = {
+			.pgsize_bitmap	= smmu->pgsize_bitmap,
+			.ias		= min_t(unsigned long, 48, VA_BITS),
+			.oas		= smmu->ias,
+			.tlb		= &arm_smmu_gather_ops_s1,
+			.iommu_dev	= smmu->dev,
+		};
+
+		smmu_mm->ops = alloc_io_pgtable_ops(fmt, &cfg, smmu_mm);
+		if (!smmu_mm->ops) {
+			kfree(smmu_mm);
+			return ERR_PTR(-ENOMEM);
+		}
+
+		entry = ops->alloc_priv_entry(ops, fmt, &cfg);
+	}
+
 	if (IS_ERR(entry)) {
+		free_io_pgtable_ops(smmu_mm->ops);
 		kfree(smmu_mm);
 		return ERR_CAST(entry);
 	}
 
-	smmu_mm->smmu = smmu_domain->smmu;
+	smmu_mm->smmu = smmu;
 	smmu_mm->entry = entry;
 	return &smmu_mm->io_mm;
 }
@@ -1963,6 +2023,7 @@ static void arm_smmu_mm_free(struct io_mm *io_mm)
 {
 	struct arm_smmu_mm *smmu_mm = to_smmu_mm(io_mm);
 
+	free_io_pgtable_ops(smmu_mm->ops);
 	iommu_free_pasid_entry(smmu_mm->entry);
 	kfree(smmu_mm);
 }
@@ -2229,6 +2290,9 @@ static struct iommu_ops arm_smmu_ops = {
 	.flush_iotlb_all	= arm_smmu_iotlb_sync,
 	.iotlb_sync		= arm_smmu_iotlb_sync,
 	.iova_to_phys		= arm_smmu_iova_to_phys,
+	.sva_map		= arm_smmu_sva_map,
+	.sva_unmap		= arm_smmu_sva_unmap,
+	.sva_iova_to_phys	= arm_smmu_sva_iova_to_phys,
 	.add_device		= arm_smmu_add_device,
 	.remove_device		= arm_smmu_remove_device,
 	.device_group		= arm_smmu_device_group,
