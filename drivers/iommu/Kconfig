@@ -81,6 +81,13 @@ config IOMMU_DEFAULT_PASSTHROUGH
 
 	  If unsure, say N here.
 
+menu "Generic PASID table support"
+
+config IOMMU_PASID_TABLE
+	bool
+
+endmenu
+
 config IOMMU_IOVA
 	tristate
 
