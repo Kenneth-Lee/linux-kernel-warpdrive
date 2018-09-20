@@ -303,7 +303,8 @@ enum iommu_fault_reason {
  * and PASID spec.
  * - Un-recoverable faults of device interest
  * - DMA remapping and IRQ remapping faults
-
+ *
+ * @list pending fault event list, used for tracking responses
  * @type contains fault type.
  * @reason fault reasons if relevant outside IOMMU driver, IOMMU driver internal
  *         faults are not reported
@@ -320,6 +321,7 @@ enum iommu_fault_reason {
  *                 sending the fault response.
  */
 struct iommu_fault_event {
+	struct list_head list;
 	enum iommu_fault_type type;
 	enum iommu_fault_reason reason;
 	u64 addr;
@@ -336,10 +338,13 @@ struct iommu_fault_event {
  * struct iommu_fault_param - per-device IOMMU fault data
  * @dev_fault_handler: Callback function to handle IOMMU faults at device level
  * @data: handler private data
- *
+ * @faults: holds the pending faults which needs response, e.g. page response.
+ * @lock: protect pending PRQ event list
  */
 struct iommu_fault_param {
 	iommu_dev_fault_handler_t handler;
+	struct list_head faults;
+	struct mutex lock;
 	void *data;
 };
 
@@ -353,6 +358,7 @@ struct iommu_fault_param {
  *	struct iommu_fwspec	*iommu_fwspec;
  */
 struct iommu_param {
+	struct mutex lock;
 	struct iommu_fault_param *fault_param;
 };
 
@@ -451,6 +457,14 @@ extern int iommu_group_register_notifier(struct iommu_group *group,
 					 struct notifier_block *nb);
 extern int iommu_group_unregister_notifier(struct iommu_group *group,
 					   struct notifier_block *nb);
+extern int iommu_register_device_fault_handler(struct device *dev,
+					iommu_dev_fault_handler_t handler,
+					void *data);
+
+extern int iommu_unregister_device_fault_handler(struct device *dev);
+
+extern int iommu_report_device_fault(struct device *dev, struct iommu_fault_event *evt);
+
 extern int iommu_group_id(struct iommu_group *group);
 extern struct iommu_group *iommu_group_get_for_dev(struct device *dev);
 extern struct iommu_domain *iommu_group_default_domain(struct iommu_group *);
@@ -713,6 +727,23 @@ static inline int iommu_group_unregister_notifier(struct iommu_group *group,
 						  struct notifier_block *nb)
 {
 	return 0;
+}
+
+static inline int iommu_register_device_fault_handler(struct device *dev,
+						iommu_dev_fault_handler_t handler,
+						void *data)
+{
+	return -ENODEV;
+}
+
+static inline int iommu_unregister_device_fault_handler(struct device *dev)
+{
+	return 0;
+}
+
+static inline int iommu_report_device_fault(struct device *dev, struct iommu_fault_event *evt)
+{
+	return -ENODEV;
 }
 
 static inline int iommu_group_id(struct iommu_group *group)
