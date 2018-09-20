@@ -436,6 +436,7 @@ EXPORT_SYMBOL_GPL(iommu_sva_unbind_device_all);
  * @features: bitmask of features that need to be initialized
  * @min_pasid: min PASID value supported by the device
  * @max_pasid: max PASID value supported by the device
+ * @mm_exit: callback for process address space release
  *
  * Users of the bind()/unbind() API must call this function to initialize all
  * features required for SVA.
@@ -447,13 +448,19 @@ EXPORT_SYMBOL_GPL(iommu_sva_unbind_device_all);
  * overrides it. Similarly, @min_pasid overrides the lower PASID limit supported
  * by the IOMMU.
  *
+ * @mm_exit is called when an address space bound to the device is about to be
+ * torn down by exit_mmap. After @mm_exit returns, the device must not issue any
+ * more transaction with the PASID given as argument. The handler gets an opaque
+ * pointer corresponding to the drvdata passed as argument to bind().
+ *
  * The device should not be performing any DMA while this function is running,
  * otherwise the behavior is undefined.
  *
  * Return 0 if initialization succeeded, or an error.
  */
 int iommu_sva_init_device(struct device *dev, unsigned long features,
-		       unsigned int min_pasid, unsigned int max_pasid)
+			  unsigned int min_pasid, unsigned int max_pasid,
+			  iommu_mm_exit_handler_t mm_exit)
 {
 	int ret;
 	struct iommu_sva_param *param;
@@ -472,6 +479,7 @@ int iommu_sva_init_device(struct device *dev, unsigned long features,
 	param->features		= features;
 	param->min_pasid	= min_pasid;
 	param->max_pasid	= max_pasid;
+	param->mm_exit		= mm_exit;
 	INIT_LIST_HEAD(&param->mm_list);
 
 	mutex_lock(&dev->iommu_param->sva_lock);

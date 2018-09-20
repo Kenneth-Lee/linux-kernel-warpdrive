@@ -60,6 +60,7 @@ struct iommu_fault_event;
 typedef int (*iommu_fault_handler_t)(struct iommu_domain *,
 			struct device *, unsigned long, int, void *);
 typedef int (*iommu_dev_fault_handler_t)(struct iommu_fault_event *, void *);
+typedef int (*iommu_mm_exit_handler_t)(struct device *dev, int pasid, void *);
 
 struct iommu_domain_geometry {
 	dma_addr_t aperture_start; /* First address that can be mapped    */
@@ -216,6 +217,7 @@ struct iommu_sva_param {
 	unsigned int min_pasid;
 	unsigned int max_pasid;
 	struct list_head mm_list;
+	iommu_mm_exit_handler_t mm_exit;
 };
 
 /**
@@ -967,7 +969,8 @@ static inline void iommu_debugfs_setup(void) {}
 #ifdef CONFIG_IOMMU_SVA
 extern int iommu_sva_init_device(struct device *dev, unsigned long features,
 				 unsigned int min_pasid,
-				 unsigned int max_pasid);
+				 unsigned int max_pasid,
+				 iommu_mm_exit_handler_t mm_exit);
 extern void iommu_sva_shutdown_device(struct device *dev);
 extern int __iommu_sva_bind_device(struct device *dev, struct mm_struct *mm,
 				   int *pasid, unsigned long flags,
@@ -978,7 +981,8 @@ extern void iommu_sva_unbind_device_all(struct device *dev);
 static inline int iommu_sva_init_device(struct device *dev,
 					unsigned long features,
 					unsigned int min_pasid,
-					unsigned int max_pasid)
+					unsigned int max_pasid,
+					iommu_mm_exit_handler_t mm_exit)
 {
 	return -ENODEV;
 }
