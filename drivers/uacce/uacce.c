@@ -63,30 +63,55 @@ static int uacce_share_vma_range(struct uacce_share_info *si)
 {
 	struct vm_area_struct *vma;
 	unsigned long end = si->vaddr + si->size;
-	int ret;
+	int ret = 0;
 
 	vma = find_vma(current->mm, si->vaddr);
 	if (!vma || vma->vm_start > si->vaddr || vma->vm_end < end)
 		return -EINVAL;
 
+	if (vma->vm_flags & (VM_GROWSDOWN | VM_GROWSUP))
+		return -EINVAL;
+
 	if (vma->vm_flags & VM_SHARED)
 		return 0;
+
+	pr_info("uacce: share range [%lx, %lx) in vma (%lx, %lx), pgoff=%lx, "
+		"flags=%lx",
+		si->vaddr, end,
+		vma->vm_start, vma->vm_end,
+		vma->vm_pgoff, vma->vm_flags);
 
 	si->old_vm_flags = vma->vm_flags;
 	if (si->vaddr != vma->vm_start) {
 		ret = split_vma(current->mm, vma, si->vaddr, 1);
 		if (ret)
 			goto out;
+
+		pr_info("uacce slite1: share range [%lx, %lx) in vma (%lx, %lx), pgoff=%lx, "
+			"flags=%lx",
+			si->vaddr, end,
+			vma->vm_start, vma->vm_end,
+			vma->vm_pgoff, vma->vm_flags);
 	}
 
 	if (end != vma->vm_end) {
 		ret = split_vma(current->mm, vma, end, 0);
 		if (ret)
 			goto out;
+			pr_info("uacce slite2: share range [%lx, %lx) in vma (%lx, %lx), pgoff=%lx, "
+				"flags=%lx",
+				si->vaddr, end,
+				vma->vm_start, vma->vm_end,
+				vma->vm_pgoff, vma->vm_flags);
 	}
 
-	vma->vm_flags |= VM_SHARED;
-
+	vma->vm_flags |= VM_SHARED | VM_MAYSHARE;
+	//todo: if the vma is file back, add file reference
+	pr_info("uacce new vma: share range [%lx, %lx) in vma (%lx, %lx), pgoff=%lx, "
+		"flags=%lx",
+		si->vaddr, end,
+		vma->vm_start, vma->vm_end,
+		vma->vm_pgoff, vma->vm_flags);
 out:
 	return ret;
 }
@@ -99,10 +124,17 @@ static void uacce_unshare_vma_range(struct uacce_share_info *si)
 	vma = find_vma(current->mm, si->vaddr);
 	if (!vma || vma->vm_start > si->vaddr || 
 	    vma->vm_end < si->vaddr + si->size ||
-	    vma->vm_flags & VM_SHARED) {
-		pr_err("uacce: unshare invalid si(%lx, %lx). "
-		       "old_vm_flags=%lx, vma->flags=%lx)\n",
-		       si->vaddr, si->size, si->old_vm_flags, vma->vm_flags);
+	    !(vma->vm_flags & VM_SHARED)) {
+		if (vma)
+			pr_err("uacce: unshare invalid si(%lx, %lx, f-%lx). "
+			       "vma (%lx, %lx, f-%lx\n",
+			       si->vaddr, si->size, si->old_vm_flags,
+			       vma->vm_start, vma->vm_end-vma->vm_start,
+			       vma->vm_flags);
+		else
+			pr_err("uacce: no vma for si(%lx, %lx, f-%lx).\n",
+			       si->vaddr, si->size,
+			       si->old_vm_flags);
 		return;
 	}
 
@@ -113,19 +145,24 @@ static void uacce_unshare_vma_range(struct uacce_share_info *si)
 
 static int uacce_pin_and_share_range(struct uacce_share_info *si)
 {
-	size_t i, nr_pages = si->size >> PAGE_SHIFT;
-	int ret;
+	int i, nr_pages = si->size >> PAGE_SHIFT;
+	int ret, rc;
 
 	/* pin the page
 	 * todo: accounting (RLIMIT_MEMLOCK) for page pin
 	 */
 	down_read(&current->mm->mmap_sem);
 
-	ret = get_user_pages_longterm(si->vaddr, nr_pages, FOLL_WRITE,
+	rc = get_user_pages_longterm(si->vaddr, nr_pages, FOLL_WRITE,
 			si->pages, NULL);
-	if (ret)
+	if (rc < 0) {
+		ret = rc;
 		goto err_with_mm_lock;
-	
+	}else if (rc != nr_pages) {
+		ret = -ENOMEM;
+		goto err_with_gup;
+	}
+
 	ret = uacce_share_vma_range(si);
 	if (ret)
 		goto err_with_gup;
@@ -134,9 +171,8 @@ static int uacce_pin_and_share_range(struct uacce_share_info *si)
 	return 0;
 
 err_with_gup:
-	for (i = nr_pages; i >= 0; i--) {
+	for (i = 0; i < rc; i++)
 		put_page(si->pages[i]);
-	}
 err_with_mm_lock:
 	up_read(&current->mm->mmap_sem);
 	return ret;
@@ -144,20 +180,18 @@ err_with_mm_lock:
 
 static void uacce_unpin_and_unshare_range(struct uacce_share_info *si)
 {
-	size_t i, nr_pages = si->size >> PAGE_SHIFT;
+	int i, nr_pages = si->size >> PAGE_SHIFT;
 
 	down_read(&current->mm->mmap_sem);
 
 	uacce_unshare_vma_range(si);
 
-	for (i = nr_pages; i >= 0; i--) {
+	for (i = 0; i < nr_pages; i++)
 		put_page(si->pages[i]);
-	}
 
 	up_read(&current->mm->mmap_sem);
 }
 
-/* todo: set the shared vma to VM_SHARE */
 static int uacce_share_mem(struct uacce_queue *q, unsigned long arg)
 {
 	struct uacce_mem_share_arg share;
@@ -183,9 +217,8 @@ static int uacce_share_mem(struct uacce_queue *q, unsigned long arg)
 
 	if ((share.size != si->size || share.vaddr != si->vaddr) ||
 	    (si->vaddr + si->size -1 < si->vaddr) ||	/* no wrap */
-	    !(si->vaddr & ~PAGE_MASK) ||		/* page align */
-	    !(si->size & ~PAGE_MASK) ||			/* page align */
-	    !domain) {
+	    (si->vaddr & ~PAGE_MASK) ||			/* page align */
+	    (si->size & ~PAGE_MASK) ) { 		/* size align */
 		ret = -EINVAL;
 		goto err_with_si;
 	}
@@ -205,16 +238,19 @@ static int uacce_share_mem(struct uacce_queue *q, unsigned long arg)
 	BUG_ON(nr_pages*sizeof(*si->pages)+sizeof(si) > PAGE_SIZE);
 
 	ret = uacce_pin_and_share_range(si);
+	pr_info("uacce share: pin_and_share return %d\n", ret);
 	if (ret)
 		goto err_with_si;
 
 	/* map the page one by one */
-	for (i = 0; i < nr_pages; i++) {
-		ret = iommu_map(domain, si->vaddr + (i << PAGE_SHIFT),
-				page_to_pfn(si->pages[i]), PAGE_SIZE, prot);
-		if (ret)
-			goto err_with_map;
-	}
+	if (domain)
+		for (i = 0; i < nr_pages; i++) {
+			ret = iommu_map(domain, si->vaddr + (i << PAGE_SHIFT),
+					page_to_pfn(si->pages[i]),
+					PAGE_SIZE, prot);
+			if (ret)
+				goto err_with_map;
+		}
 
 	list_add(&si->list, &q->share_mem_list);
 
@@ -224,7 +260,6 @@ err_with_map:
 	for (j = i; j >= 0; j--) {
 		iommu_unmap(domain, page_to_pfn(si->pages[j]), PAGE_SIZE);
 		SetPageDirty(si->pages[j]); //todo: is this necessary?
-		put_page(si->pages[j]);
 	}
 	uacce_unpin_and_unshare_range(si);
 err_with_si:
@@ -246,23 +281,24 @@ static int uacce_unshare_mem(struct uacce_queue *q, unsigned long arg)
 	if (copy_from_user(&share, (void __user *)arg, sizeof(share)))
 		return -EFAULT;
 
-	if (!domain)
-		return -ENODEV;
-
 	si = uacce_search_share_info(q, share.vaddr, share.size);
 	if (IS_ERR_OR_NULL(si))
 		return PTR_ERR_OR_ZERO(si);
 
 	nr_pages = si->size >> PAGE_SHIFT;
 
+	uacce_unpin_and_unshare_range(si);
+
 	for (i = 0; i < nr_pages; i++) {
-		iommu_unmap(domain, page_to_pfn(si->pages[i]), PAGE_SIZE);
-		SetPageDirty(si->pages[i]);
-		put_page(si->pages[i]); /* todo: accounting */
+		SetPageDirty(si->pages[i]); //todo: is this necessary?
+		if (domain)
+			iommu_unmap(domain, page_to_pfn(si->pages[i]),
+				    PAGE_SIZE);
 	}
 
 	list_del(&si->list);
 	free_page((unsigned long)si);
+	pr_info("uacce unshared si(%lx, %lx)\n", si->vaddr, si->size);
 
 	return 0;
 }
@@ -362,7 +398,6 @@ static int uacce_fops_release(struct inode *inode, struct file *filep)
 		uacce->ops->stop_queue(q);
 
 	list_for_each_entry_safe(si, si_tmp, &q->share_mem_list, list) {
-		pr_err("there are data?\n");
 		nr_pages = si->size >> PAGE_SHIFT;
 		for (i = 0; i < nr_pages; i++) {
 			if (domain)

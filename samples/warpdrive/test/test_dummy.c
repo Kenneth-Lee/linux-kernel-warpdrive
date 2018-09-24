@@ -3,6 +3,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/types.h>
+#include <unistd.h>
 
 #include "../wd.h"
 #include "../../../drivers/uacce/dummy_drv/wd_dummy_usr_if.h"
@@ -38,6 +40,15 @@ int wd_dummy_request_memcpy_queue(struct wd_queue *q, int max_copy_size)
 	return wd_request_queue(q);
 }
 
+static void test_fork() {
+	pid_t pid = fork();
+
+	SYS_ERR_COND(pid<0, "fork");
+
+	if (!pid)
+		sleep(100000);
+}
+
 static void _do_test(struct wd_queue *q)
 {
 	int ret, i;
@@ -49,14 +60,16 @@ static void _do_test(struct wd_queue *q)
 	memset(s, 'x', CPSZ);
 
 	ret = wd_mem_share(q, s, CPSZ, 0);
-	SYS_ERR_COND(!s, "mem_share src");
+	SYS_ERR_COND(ret, "mem_share src");
 
 	t = malloc(CPSZ);
 	SYS_ERR_COND(!t, "malloc taddr");
 	memset(t, 'y', CPSZ);
 
 	ret = wd_mem_share(q, t, CPSZ, 0);
-	SYS_ERR_COND(!t, "mem_share tgt");
+	SYS_ERR_COND(ret, "mem_share tgt");
+
+	test_fork();
 
 	ret = wd_dummy_memcpy(q, t, s, CPSZ);
 	SYS_ERR_COND(ret, "acce cpy");
@@ -79,7 +92,7 @@ static void _do_test(struct wd_queue *q)
 	free(t);
 }
 
-#define REP_TEST 10
+#define REP_TEST 1
 int main(int argc, char *argv[])
 {
 	struct wd_queue q;

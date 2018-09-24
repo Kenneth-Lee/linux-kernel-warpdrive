@@ -86,21 +86,24 @@ void wd_flush(struct wd_queue *q)
 	drv_flush(q);
 }
 
+#define PAGE_SIZE 4096UL
+#define PAGE_MASK (~(PAGE_SIZE-1))
 int wd_mem_share(struct wd_queue *q, const void *addr, size_t size, int flags)
 {
 	struct uacce_mem_share_arg si;
 
-	si.vaddr = (__u64)addr;
-	si.size = (__u64)size;
-	return ioctl(q->fd, UACCE_CMD_SHARE_MEM, &si);
+	si.vaddr = (__u64)addr & PAGE_MASK;
+	si.size = (__u64)(size+PAGE_SIZE-1) & PAGE_MASK;
+	errno = -ioctl(q->fd, UACCE_CMD_SHARE_MEM, &si);
+	return -errno;
 }
 
 void wd_mem_unshare(struct wd_queue *q, const void *addr, size_t size)
 {
 	struct uacce_mem_share_arg si;
 
-	si.vaddr = (__u64)addr;
-	si.size = (__u64)size;
-	ioctl(q->fd, UACCE_CMD_UNSHARE_MEM, &si);
+	si.vaddr = (__u64)addr & PAGE_MASK;
+	si.size = (__u64)(size+PAGE_SIZE-1) & PAGE_MASK;
+	errno = -ioctl(q->fd, UACCE_CMD_UNSHARE_MEM, &si);
 }
 

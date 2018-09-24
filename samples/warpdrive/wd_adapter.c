@@ -20,8 +20,6 @@ static struct wd_drv_dio_if hw_dio_tbl[] = { {
 		.close = dummy_unset_queue_dio,
 		.send = dummy_add_to_dio_q,
 		.recv = dummy_get_from_dio_q,
-		.share = dummy_share,
-		.unshare = dummy_unshare,
 		.flush = dummy_flush,
 	},
 	/* Add other drivers direct IO operations here */
@@ -64,11 +62,13 @@ int drv_recv(struct wd_queue *q, void **req)
 
 int drv_share(struct wd_queue *q, const void *addr, size_t size, int flags)
 {
+	printf("wd: share %lx, size=%lx\n", addr, size);
 	return hw_dio_tbl[q->hw_type_id].share(q, addr, size, flags);
 }
 
 void drv_unshare(struct wd_queue *q, const void *addr, size_t size)
 {
+	printf("wd: unshare %lx, size=%lx\n", addr, size);
 	hw_dio_tbl[q->hw_type_id].unshare(q, addr, size);
 }
 

@@ -120,11 +120,6 @@ int dummy_get_from_dio_q(struct wd_queue *q, void **resp)
 	}
 }
 
-int dummy_share(struct wd_queue *q, const void *addr,
-		size_t size, int flags) { return 0; }
-
-int dummy_unshare(struct wd_queue *q, const void *addr, size_t size) {return 0;}
-
 void dummy_flush(struct wd_queue *q)
 {
 	/* use ioctl to flush, this is just for dummy driver, in pratical, this
