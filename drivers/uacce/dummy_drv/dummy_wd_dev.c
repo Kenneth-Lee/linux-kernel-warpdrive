@@ -36,6 +36,7 @@ struct dummy_hw_queue {
 	struct task_struct *tsk;
 	__u32 tail;
 	int updated;
+	void *vmap;
 
 	struct uacce_queue wdq;
 	struct dummy_hw_queue_reg *reg;
@@ -49,32 +50,27 @@ static struct dummy_hw {
 	struct platform_device *pdev;
 } hws[MAX_DEV];
 
-/* This function will only work in the requesting process context */
-static int _do_user_copy(void *tgt, void *src, size_t len)
+static int _do_copy(struct uacce_queue *q, void *tgt, void *src, size_t len)
 {
-	void *tmp = kmalloc(len, GFP_KERNEL);
-	int ret = 0;
+	struct dummy_hw_queue *hwq = (struct dummy_hw_queue *)q->priv;
 
-	if (!tmp)
-		return -ENOMEM;
+	size_t ktgt = (unsigned long)tgt - q->as->va;
+	size_t ksrc = (unsigned long)src - q->as->va;
+	size_t range = q->as->nr_pages << PAGE_SHIFT;
 
-	if (copy_from_user(tmp, src, len)) {
-		pr_info("fail copy_from_user(%p, %p, %ld)\n",
-				tmp, src, len);
-		ret = -EFAULT;
-		goto out_with_mem;
-	}
+	if (ktgt > range || ktgt + len> range)
+		return -EINVAL;
 
-	if (copy_to_user(tgt, tmp, len)) {
-		pr_info("fail copy_to_user(%p, %p, %ld)\n",
-				tgt, tmp, len);
-		ret = -EFAULT;
-		goto out_with_mem;
-	}
+	if (ksrc > range || ksrc + len > range)
+		return -EINVAL;
 
-out_with_mem:
-	kfree(tmp);
-	return ret;
+	ktgt += (unsigned long)hwq->vmap;
+	ksrc += (unsigned long)hwq->vmap;
+	pr_info("memcpy(%lx, %lx, %lx), va=%lx, kva=%lx\n", ktgt, ksrc, len,
+		q->as->va, (unsigned long)hwq->vmap);
+	memcpy((void *)ktgt, (void *)ksrc, len);
+
+	return 0;
 }
 
 static void _queue_work(struct dummy_hw_queue *hwq)
@@ -83,6 +79,8 @@ static void _queue_work(struct dummy_hw_queue *hwq)
 	__u32 head = readl(&hwq->reg->head);
 	__u32 tail;
 
+
+	pr_info("dummy _queue_work tail=%d head=%d\n", hwq->tail, head);
 	if (head >= bd_num) {
 		pr_err("dummy_wd io error, head=%d\n", head);
 		return;
@@ -93,10 +91,10 @@ static void _queue_work(struct dummy_hw_queue *hwq)
 		if(hwq->reg->ring[hwq->tail].size > hwq->hw->max_copy_size)
 			hwq->reg->ring[hwq->tail].ret = -EINVAL;
 		else
-			hwq->reg->ring[hwq->tail].ret =
-			_do_user_copy(hwq->reg->ring[hwq->tail].tgt_addr,
-					hwq->reg->ring[hwq->tail].src_addr,
-					hwq->reg->ring[hwq->tail].size);
+			hwq->reg->ring[hwq->tail].ret = _do_copy(&hwq->wdq, 
+				 hwq->reg->ring[hwq->tail].tgt_addr,
+				 hwq->reg->ring[hwq->tail].src_addr,
+				 hwq->reg->ring[hwq->tail].size);
 		pr_info("memcpy(%p, %p, %ld) = %d",
 			hwq->reg->ring[hwq->tail].tgt_addr,
 			hwq->reg->ring[hwq->tail].src_addr,
@@ -183,11 +181,30 @@ static int dummy_mmap(struct uacce_queue *q, struct vm_area_struct *vma)
 {
 	struct dummy_hw_queue *hwq = (struct dummy_hw_queue *)q->priv;
 
-	if (vma->vm_pgoff != 0 || vma->vm_end - vma->vm_start > PAGE_SIZE)
+	if (vma->vm_pgoff != 0 ||
+	    vma->vm_end - vma->vm_start > PAGE_SIZE ||
+	    !(vma->vm_flags & VM_SHARED))
 		return -EINVAL;
 
 	return remap_pfn_range(vma, vma->vm_start, __pa(hwq->reg)>>PAGE_SHIFT,
-		PAGE_SIZE, PAGE_SHARED);
+		PAGE_SIZE, vma->vm_page_prot);
+}
+
+static int dummy_map(struct uacce_queue *q) {
+	struct dummy_hw_queue *hwq = (struct dummy_hw_queue *)q->priv;
+	struct uacce_as *as = q->as;
+
+	hwq->vmap = vmap(as->pages, as->nr_pages, VM_MAP, PAGE_KERNEL);
+	if (!hwq->vmap)
+		return -ENOMEM;
+
+	return 0;
+}
+
+static void dummy_unmap(struct uacce_queue *q) {
+	struct dummy_hw_queue *hwq = (struct dummy_hw_queue *)q->priv;
+
+	vunmap(hwq->vmap);
 }
 
 static long dummy_ioctl(struct uacce_queue *q, unsigned int cmd,
@@ -215,6 +232,8 @@ static const struct uacce_ops dummy_ops = {
 	.put_queue = dummy_put_queue,
 	.is_q_updated = dummy_is_q_updated,
 	.mmap = dummy_mmap,
+	.map = dummy_map,
+	.unmap = dummy_unmap,
 	.ioctl = dummy_ioctl,
 	.mask_notify = dummy_mask_notify,
 };
@@ -249,6 +268,7 @@ static int dummy_wd_probe(struct platform_device *pdev)
 	uacce->dev = &pdev->dev;
 	uacce->priv = hw;
 	uacce->flags = 0;
+	uacce->io_nr_pages = 1;
 	uacce->ops = &dummy_ops;
 
 	return uacce_register(uacce);
