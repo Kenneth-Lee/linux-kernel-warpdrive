@@ -21,6 +21,7 @@ static struct wd_drv_dio_if hw_dio_tbl[] = { {
 		.send = dummy_add_to_dio_q,
 		.recv = dummy_get_from_dio_q,
 		.flush = dummy_flush,
+		.preserve_mem = dummy_preserve_mem,
 	},
 	/* Add other drivers direct IO operations here */
 };
@@ -60,25 +61,16 @@ int drv_recv(struct wd_queue *q, void **req)
 	return hw_dio_tbl[q->hw_type_id].recv(q, req);
 }
 
-int drv_share(struct wd_queue *q, const void *addr, size_t size, int flags)
-{
-	printf("wd: share %lx, size=%lx\n", addr, size);
-	return hw_dio_tbl[q->hw_type_id].share(q, addr, size, flags);
-}
-
-void drv_unshare(struct wd_queue *q, const void *addr, size_t size)
-{
-	printf("wd: unshare %lx, size=%lx\n", addr, size);
-	hw_dio_tbl[q->hw_type_id].unshare(q, addr, size);
-}
-
-bool drv_can_do_mem_share(struct wd_queue *q)
-{
-	return hw_dio_tbl[q->hw_type_id].share != NULL;
-}
-
 void drv_flush(struct wd_queue *q)
 {
 	if (hw_dio_tbl[q->hw_type_id].flush)
 		hw_dio_tbl[q->hw_type_id].flush(q);
+}
+
+void *drv_preserve_mem(struct wd_queue *q, size_t size)
+{
+	if (hw_dio_tbl[q->hw_type_id].preserve_mem)
+		return hw_dio_tbl[q->hw_type_id].preserve_mem(q, size);
+	else
+		return 0;
 }

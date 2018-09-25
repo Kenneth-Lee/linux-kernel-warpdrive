@@ -14,7 +14,6 @@ void dummy_unset_queue_dio(struct wd_queue *q);
 int dummy_add_to_dio_q(struct wd_queue *q, void *req);
 int dummy_get_from_dio_q(struct wd_queue *q, void **req);
 void dummy_flush(struct wd_queue *q);
-int dummy_share(struct wd_queue *q, const void *addr, size_t size, int flags);
-int dummy_unshare(struct wd_queue *q, const void *addr, size_t size);
+void *dummy_preserve_mem(struct wd_queue *q, size_t size);
 
 #endif

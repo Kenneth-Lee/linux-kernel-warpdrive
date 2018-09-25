@@ -78,11 +78,13 @@ int hizip_deflate(FILE *source, FILE *dest,  int type)
 		fputs("mmap file fail!\n", stderr);
 		goto release_q;
 	}
+#ifdef TO_BE_UPDATED
 	ret = wd_mem_share(&q, a, file_msize, 0);
 	if (ret) {
 		fprintf(stderr, "wd_mem_share dma a buf fail!err=%d\n", -errno);
 		goto unmap_file;
 	}
+#endif
 	/* Allocate some space and setup a DMA mapping */
 	b = mmap((void *)0x0, ASIZE, PROT_READ | PROT_WRITE,
 		 MAP_PRIVATE | MAP_ANONYMOUS, 0, 0);
@@ -91,11 +93,13 @@ int hizip_deflate(FILE *source, FILE *dest,  int type)
 		goto unshare_file;
 	}
 	memset(b, 0, ASIZE);
+#ifdef TO_BE_UPDATED
 	ret = wd_mem_share(&q, b, ASIZE, 0);
 	if (ret) {
 		fputs("wd_mem_share dma b buf fail!\n", stderr);
 		goto unmap_mem;
 	}
+#endif
 	src = (char *)a;
 	dst = (char *)b;
 
@@ -145,12 +149,16 @@ recv_again:
 
 	free(msg);
 alloc_msg_fail:
+#ifdef TO_BE_UPDATED
 	wd_mem_unshare(&q, b, ASIZE);
 unmap_mem:
+#endif
 	munmap(b, ASIZE);
 unshare_file:
+#ifdef TO_BE_UPDATED
 	wd_mem_unshare(&q, a, file_msize);
 unmap_file:
+#endif
 	munmap(a, file_msize);
 release_q:
 	wd_release_queue(&q);

@@ -16,6 +16,7 @@
 	perror(msg); \
 	exit(EXIT_FAILURE); }
 
+void *shm;
 
 int wd_dummy_memcpy(struct wd_queue *q, void *dst, void *src, size_t size)
 {
@@ -35,7 +36,7 @@ int wd_dummy_memcpy(struct wd_queue *q, void *dst, void *src, size_t size)
 
 int wd_dummy_request_memcpy_queue(struct wd_queue *q, int max_copy_size)
 {
-	q->dev_path = "/dev/ua0";
+	q->dev_path = "/dev/ua1";
 	strncpy(q->hw_type, "wd_dummy_v1", PATH_STR_SIZE);
 	return wd_request_queue(q);
 }
@@ -55,19 +56,13 @@ static void _do_test(struct wd_queue *q)
 	char *s, *t;
 
 	//init user data (to be copied)
-	s = malloc(CPSZ);
+	s = shm;
 	SYS_ERR_COND(!s, "malloc saddr");
 	memset(s, 'x', CPSZ);
 
-	ret = wd_mem_share(q, s, CPSZ, 0);
-	SYS_ERR_COND(ret, "mem_share src");
-
-	t = malloc(CPSZ);
+	t = shm+CPSZ;
 	SYS_ERR_COND(!t, "malloc taddr");
 	memset(t, 'y', CPSZ);
-
-	ret = wd_mem_share(q, t, CPSZ, 0);
-	SYS_ERR_COND(ret, "mem_share tgt");
 
 	test_fork();
 
@@ -85,11 +80,6 @@ static void _do_test(struct wd_queue *q)
 
 	if (i == CPSZ)
 		printf("test success\n");
-
-	wd_mem_unshare(q, s, CPSZ);
-	wd_mem_unshare(q, t, CPSZ);
-	free(s);
-	free(t);
 }
 
 #define REP_TEST 1
@@ -100,6 +90,9 @@ int main(int argc, char *argv[])
 
 	ret = wd_dummy_request_memcpy_queue(&q, 4096);
 	SYS_ERR_COND(ret, "wd_request_queue");
+
+	shm = wd_preserve_share_memory(&q, CPSZ*4);
+	SYS_ERR_COND(!shm, "preseve memory");
 
 	for (i = 0; i < REP_TEST; i++)
 		_do_test(&q);

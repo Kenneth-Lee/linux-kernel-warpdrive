@@ -47,9 +47,24 @@ typedef int bool;
 #define WDQ_MAP_REGION(region_index)	((region_index << 12) & 0xf000)
 #define WDQ_MAP_Q(q_index)		((q_index << 16) & 0xffff0000)
 
+#if defined(__AARCH64_CMODEL_SMALL__) && __AARCH64_CMODEL_SMALL__
+
+#define dsb(opt)	asm volatile("dsb " #opt : : : "memory")
+#define rmb()		dsb(ld)
+#define wmb()		dsb(st)
+
+#else
+
+#define rmb()
+#define wmb()
+#error "no platform mb, define one before compiling"
+
+#endif
+
 static inline void wd_reg_write(void *reg_addr, uint32_t value)
 {
 	*((volatile uint32_t *)reg_addr) = value;
+	wmb();
 }
 
 static inline uint32_t wd_reg_read(void *reg_addr)
@@ -57,6 +72,7 @@ static inline uint32_t wd_reg_read(void *reg_addr)
 	uint32_t temp;
 
 	temp = *((volatile uint32_t *)reg_addr);
+	rmb();
 
 	return temp;
 }
@@ -131,9 +147,7 @@ extern int wd_send(struct wd_queue *q, void *req);
 extern int wd_recv(struct wd_queue *q, void **resp);
 extern void wd_flush(struct wd_queue *q);
 extern int wd_recv_sync(struct wd_queue *q, void **resp, __u16 ms);
-extern int wd_mem_share(struct wd_queue *q, const void *addr,
-			size_t size, int flags);
-extern void wd_mem_unshare(struct wd_queue *q, const void *addr, size_t size);
+extern void *wd_preserve_share_memory(struct wd_queue *q, size_t size);
 
 /* for debug only */
 extern int wd_dump_all_algos(void);

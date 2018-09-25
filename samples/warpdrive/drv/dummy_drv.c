@@ -126,3 +126,14 @@ void dummy_flush(struct wd_queue *q)
 	 * should be a read or write to hardware, avoiding syscall */
 	ioctl(q->fd, DUMMY_CMD_FLUSH);
 }
+
+#define PAGE_SIZE 4096
+
+void *dummy_preserve_mem(struct wd_queue *q, size_t size) {
+	void *mem = mmap(0, size, PROT_READ | PROT_WRITE,
+		    MAP_SHARED, q->fd, PAGE_SIZE);
+	if (mem == MAP_FAILED)
+		return NULL;
+	else
+		return mem;
+}
