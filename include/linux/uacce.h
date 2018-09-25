@@ -2,6 +2,7 @@
 #ifndef __UACCE_H
 #define __UACCE_H
 
+#include <linux/cdev.h>
 #include <linux/device.h>
 #include <linux/list.h>
 #include <linux/iommu.h>
@@ -11,6 +12,23 @@ struct uacce_queue;
 struct uacce;
 
 #define UACCE_FLAG_SHARE_ALL	0x1	/* support share virtual memory */
+
+/* address space struct, allocated per process */
+struct uacce_as {
+	struct mutex mutex;
+	atomic_t refcount;
+
+	pid_t pid;
+
+	/* todo: support multiple section in the future */
+	struct page **pages;
+	unsigned long va;
+	int nr_pages;
+	int prot;
+
+	struct list_head list;
+	struct list_head qs;
+};
 
 /**
  * struct uacce_ops - WD device operations
@@ -34,24 +52,26 @@ struct uacce_ops {
 	int (*is_q_updated)(struct uacce_queue *q);
 	void (*mask_notify)(struct uacce_queue *q, int event_mask);
 	int (*mmap)(struct uacce_queue *q, struct vm_area_struct *vma);
+	int (*map)(struct uacce_queue *q);
+	void (*unmap)(struct uacce_queue *q);
 	int (*reset)(struct uacce *uacce);
 	int (*reset_queue)(struct uacce_queue *q);
 	long (*ioctl)(struct uacce_queue *q, unsigned int cmd,
 			unsigned long arg);
-	int (*get_available_instances)(struct uacce *uacce);
 };
 
 struct uacce_queue {
 	struct mutex mutex;
 	struct uacce *uacce;
-	int pid;
 	__u32 flags;
 	void *priv;
 	wait_queue_head_t wait;
+	bool mapped_shm; /* this field is protected by the uacce_as lock */
 #ifdef CONFIG_IOMMU_SVA
 	int pasid;
 #endif
-	struct list_head share_mem_list;
+	struct uacce_as *as;
+	struct list_head list; /* as list for as->qs */
 };
 
 struct uacce {
@@ -65,21 +85,15 @@ struct uacce {
 	u32 iommu_type;
 	u32 dma_flag;
 	u32 dev_id;
+	struct cdev *cdev;
 	void *priv;
 	int flags;
 	const char *api_ver;
+	size_t io_nr_pages;
 };
 
 int uacce_register(struct uacce *uacce);
 void uacce_unregister(struct uacce *uacce);
 void uacce_wake_up(struct uacce_queue *q);
-
-#ifdef KENNY_TO_REMOVE
-int uacce_is_uacce(struct device *dev);
-struct uacce *uacce_pdev_uacce(struct device *dev);
-int uacce_pasid_pri_check(int pasid);
-int uacce_get(struct device *dev);
-int uacce_put(struct device *dev);
-#endif
 
 #endif
