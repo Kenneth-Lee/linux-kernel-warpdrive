@@ -46,8 +46,10 @@ static void test_fork() {
 
 	SYS_ERR_COND(pid<0, "fork");
 
-	if (!pid)
-		sleep(100000);
+	if (!pid) {
+		sleep(1);
+		exit(0);
+	}
 }
 
 static void _do_test(struct wd_queue *q)
@@ -82,7 +84,7 @@ static void _do_test(struct wd_queue *q)
 		printf("test success\n");
 }
 
-#define REP_TEST 1
+#define REP_TEST 1000
 int main(int argc, char *argv[])
 {
 	struct wd_queue q;
