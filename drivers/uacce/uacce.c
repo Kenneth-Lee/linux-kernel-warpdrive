@@ -14,18 +14,8 @@ static dev_t uacce_devt;
 static DEFINE_MUTEX(uacce_mutex);
 static LIST_HEAD(as_list); /* todo: use rcu version in the future */
 
-static void uacce_dump_pages(struct uacce_as *as, char *msg)
-{
-	int i;
-
-	pr_info("%s", msg);
-	pr_info(" dump pages(%d) state\n", as->nr_pages);
-	for (i=0; i < as->nr_pages; i++)
-		pr_info("page[%d] ref=%d", i, page_ref_count(as->pages[i]));
-}
-
 /**
- * cce4u_wake_up - Wake up the process who is waiting this queue
+ * uacce_wake_up - Wake up the process who is waiting this queue
  * @q the accelerator queue to wake up
  */
 void uacce_wake_up(struct uacce_queue *q)
@@ -212,12 +202,6 @@ static int uacce_fops_open(struct inode *inode, struct file *filep)
 	if (!uacce)
 		return -ENODEV;
 
-	if (!uacce->dev) {
-		/* open manager */
-		filep->private_data = NULL;
-		return 0;
-	}
-
 	if (!uacce->ops->get_queue)
 		return -EINVAL;
 
@@ -281,8 +265,6 @@ static vm_fault_t uacce_shm_vm_fault(struct vm_fault *vmf)
 	vmf->page = as->pages[page_offset];
 	mutex_unlock(&as->mutex);
 
-	uacce_dump_pages(as, "fault");
-
 	return 0;
 }
 
@@ -294,11 +276,6 @@ static int uacce_fops_release(struct inode *inode, struct file *filep)
 {
 	struct uacce_queue *q = (struct uacce_queue *)filep->private_data;
 	struct uacce *uacce;
-
-	if (!q) {
-		/* close manager */
-		return 0;
-	}
 
 	uacce = q->uacce;
 
@@ -313,7 +290,6 @@ static int uacce_fops_release(struct inode *inode, struct file *filep)
 	if (uacce->ops->put_queue)
 		uacce->ops->put_queue(q);
 	
-	/* todo: should I get/put the module or device? */
 	return 0;
 }
 
@@ -391,9 +367,6 @@ static int uacce_fops_mmap(struct file *filep, struct vm_area_struct *vma)
 
 	vma->vm_ops = &uacce_shm_vm_ops;
 	vma->vm_private_data = as;
-
-	if (!q)
-		return uacce_create_shm_pages(as, vma);
 
 	uacce = q->uacce;
 
@@ -525,11 +498,6 @@ void uacce_unregister(struct uacce *uacce)
 }
 EXPORT_SYMBOL_GPL(uacce_unregister);
 
-static struct uacce uacce_manager = {
-	.name = "Uacce Manager",
-	.owner = THIS_MODULE,
-};
-
 static int __init uacce_init(void)
 {
 	int ret;
@@ -546,15 +514,8 @@ static int __init uacce_init(void)
 
 	pr_info("uacce init with major number:%d\n", MAJOR(uacce_devt));
 
-	/* create the manager device */
-	ret = uacce_create_chrdev(&uacce_manager);
-	if (ret < 0)
-		goto err_with_chrdev_region;
-
 	return 0;
 
-err_with_chrdev_region:
-	unregister_chrdev_region(uacce_devt, MINORMASK);
 err_with_class:
 	class_destroy(uacce_class);
 err:
@@ -564,7 +525,6 @@ err:
 static __exit void uacce_exit(void)
 {
 	mutex_lock(&uacce_mutex);
-	uacce_destroy_chrdev(&uacce_manager);
 	unregister_chrdev_region(uacce_devt, MINORMASK);
 	class_destroy(uacce_class);
 	idr_destroy(&uacce_idr);
