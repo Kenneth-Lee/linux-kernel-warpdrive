@@ -51,12 +51,11 @@ int wd_recv(struct wd_queue *q, void **resp)
 	return drv_recv(q, resp);
 }
 
-static int wd_flush_and_wait(struct wd_queue *q, __u16 ms)
+static int wd_wait(struct wd_queue *q, __u16 ms)
 {
 	struct pollfd fds[1];
 	int ret;
 
-	wd_flush(q);
 	fds[0].fd = q->fd;
 	fds[0].events = POLLIN;
 	ret = poll(fds, 1, ms);
@@ -73,7 +72,7 @@ int wd_recv_sync(struct wd_queue *q, void **resp, __u16 ms)
 	while (1) {
 		ret = wd_recv(q, resp);
 		if (ret == -EBUSY) {
-			ret = wd_flush_and_wait(q, ms);
+			ret = wd_wait(q, ms);
 			if (ret)
 				return ret;
 		} else

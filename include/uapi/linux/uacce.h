@@ -7,4 +7,6 @@
 
 #define UACCE_CLASS_NAME		"uacce"
 
+#define UACCE_CMD_SHARE_SVAS	_IO('W', 0)
+
 #endif

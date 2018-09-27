@@ -64,24 +64,34 @@ static struct dummy_hw {
 static int _do_copy(struct uacce_queue *q, void *tgt, void *src, size_t len)
 {
 	struct dummy_hw_queue *hwq = (struct dummy_hw_queue *)q->priv;
+	struct uacce_svas *svas = uacce_get_svas(q);
+	int ret = 0;
+	size_t ktgt = (unsigned long)tgt - svas->va;
+	size_t ksrc = (unsigned long)src - svas->va;
+	size_t range = q->svas->nr_pages << PAGE_SHIFT;
 
-	size_t ktgt = (unsigned long)tgt - q->as->va;
-	size_t ksrc = (unsigned long)src - q->as->va;
-	size_t range = q->as->nr_pages << PAGE_SHIFT;
+	mutex_lock(&svas->mutex);
 
-	if (ktgt > range || ktgt + len> range)
-		return -EINVAL;
+	if (ktgt > range || ktgt + len> range) {
+		ret = -EINVAL;
+		goto out;
+	}
 
-	if (ksrc > range || ksrc + len > range)
-		return -EINVAL;
+	if (ksrc > range || ksrc + len > range) {
+		ret = -EINVAL;
+		goto out;
+	}
 
 	ktgt += (unsigned long)hwq->vmap;
 	ksrc += (unsigned long)hwq->vmap;
 	dummy_log("memcpy(%lx, %lx, %lx), va=%lx, kva=%lx\n", ktgt, ksrc, len,
-		q->as->va, (unsigned long)hwq->vmap);
+		svas->va, (unsigned long)hwq->vmap);
 	memcpy((void *)ktgt, (void *)ksrc, len);
 
-	return 0;
+out:
+	mutex_unlock(&svas->mutex);
+	uacce_put_svas(q);
+	return ret;
 }
 
 static void _queue_work(struct dummy_hw_queue *hwq)
@@ -216,9 +226,14 @@ static int dummy_mmap(struct uacce_queue *q, struct vm_area_struct *vma)
 
 static int dummy_map(struct uacce_queue *q) {
 	struct dummy_hw_queue *hwq = (struct dummy_hw_queue *)q->priv;
-	struct uacce_as *as = q->as;
+	struct uacce_svas *svas = uacce_get_svas(q);
 
-	hwq->vmap = vmap(as->pages, as->nr_pages, VM_MAP, PAGE_KERNEL);
+	mutex_lock(&svas->mutex);
+	hwq->vmap = vmap(svas->pages, svas->nr_pages, VM_MAP, PAGE_KERNEL);
+	mutex_unlock(&svas->mutex);
+
+	uacce_put_svas(q);
+
 	if (!hwq->vmap)
 		return -ENOMEM;
 

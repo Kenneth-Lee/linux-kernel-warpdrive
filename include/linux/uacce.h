@@ -14,11 +14,9 @@ struct uacce;
 #define UACCE_FLAG_SHARE_ALL	0x1	/* support share virtual memory */
 
 /* address space struct, allocated per process */
-struct uacce_as {
+struct uacce_svas {
 	struct mutex mutex;
 	atomic_t refcount;
-
-	pid_t pid;
 
 	/* todo: support multiple section in the future */
 	struct page **pages;
@@ -70,7 +68,7 @@ struct uacce_queue {
 #ifdef CONFIG_IOMMU_SVA
 	int pasid;
 #endif
-	struct uacce_as *as;
+	struct uacce_svas *svas;
 	struct list_head list; /* as list for as->qs */
 };
 
@@ -95,5 +93,7 @@ struct uacce {
 int uacce_register(struct uacce *uacce);
 void uacce_unregister(struct uacce *uacce);
 void uacce_wake_up(struct uacce_queue *q);
+struct uacce_svas *uacce_get_svas(struct uacce_queue *q);
+void uacce_put_svas(struct uacce_queue *q);
 
 #endif
