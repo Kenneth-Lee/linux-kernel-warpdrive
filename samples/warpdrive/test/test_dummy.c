@@ -31,7 +31,7 @@ int wd_dummy_memcpy(struct wd_queue *q, void *dst, void *src, size_t size)
 	if (ret)
 		return ret;
 
-	return wd_recv_sync(q, (void **)&resp, 0);
+	return wd_recv_sync(q, (void **)&resp, 1000);
 }
 
 int wd_dummy_request_memcpy_queue(struct wd_queue *q, int max_copy_size)
@@ -84,7 +84,7 @@ static void _do_test(struct wd_queue *q)
 		printf("test success\n");
 }
 
-#define REP_TEST 1000
+#define REP_TEST 100
 int main(int argc, char *argv[])
 {
 	struct wd_queue q;
