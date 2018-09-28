@@ -13,6 +13,7 @@ static struct class *uacce_class;
 static DEFINE_IDR(uacce_idr);
 static dev_t uacce_devt;
 static DEFINE_MUTEX(uacce_mutex);
+static DEFINE_RWLOCK(uacce_lock);
 
 static const struct file_operations uacce_fops;
 
@@ -22,100 +23,43 @@ static const struct file_operations uacce_fops;
  */
 void uacce_wake_up(struct uacce_queue *q)
 {
-	wake_up(&q->wait);
+	dev_info(q->uacce->dev, "wake up\n");
+	wake_up_interruptible(&q->wait);
 }
 EXPORT_SYMBOL_GPL(uacce_wake_up);
 
 static void uacce_cls_release(struct device *dev) { }
 
-static inline void uacce_get_svas_no_q(struct uacce_svas *svas)
+static struct uacce_svas *uacce_alloc_svas(void)
 {
-	atomic_inc(&svas->refcount);
+	struct uacce_svas *svas;
+
+	svas = kzalloc(sizeof(*svas), GFP_KERNEL | GFP_ATOMIC);
+	if (!svas)
+		return ERR_PTR(-ENOMEM);
+
+	INIT_LIST_HEAD(&svas->qs);
+
+	return svas;
 }
 
-static inline void uacce_put_svas_no_q(struct uacce_svas *svas)
+static void uacce_free_svas(struct uacce_svas *svas)
 {
 	int i;
 
-	if (atomic_dec_and_test(&svas->refcount)) {
-		if (svas->pages) {
-			for (i = 0; i < svas->nr_pages; i++)
-				put_page(svas->pages[i]);
-			kfree(svas->pages);
-		}
-		kfree(svas);
+	if (svas->pages) {
+		for (i = 0; i < svas->nr_pages; i++)
+			put_page(svas->pages[i]);
+		kfree(svas->pages);
 	}
+	kfree(svas);
 }
-
-/* hold the q mutex before call this function */
-struct uacce_svas *uacce_get_svas(struct uacce_queue *q)
-{
-	if (q->svas) {
-		uacce_get_svas_no_q(q->svas);
-		return q->svas;
-	}
-
-	q->svas = kzalloc(sizeof(*q->svas), GFP_KERNEL);
-	if (!q->svas)
-		return ERR_PTR(-ENOMEM);
-
-	mutex_init(&q->svas->mutex);
-	INIT_LIST_HEAD(&q->svas->qs);
-	atomic_inc(&q->svas->refcount);
-
-	return q->svas;
-}
-EXPORT_SYMBOL_GPL(uacce_get_svas);
-
-/* share the src's svas to the tgt
- * DO NOT hold the q mutex before call this function */
-static int uacce_share_svas(struct uacce_queue *tgt, struct uacce_queue *src)
-{
-	struct uacce_svas *svas;
-
-	mutex_lock(&src->mutex);
-	svas = uacce_get_svas(src);
-	mutex_unlock(&src->mutex);
-
-	if (!svas)
-		return -ENODEV;
-
-	mutex_lock(&tgt->mutex);
-	tgt->svas = svas;
-	mutex_unlock(&tgt->mutex);
-
-	mutex_lock(&svas->mutex);
-	list_add(&tgt->list, &svas->qs);
-	mutex_unlock(&svas->mutex);
-
-	return 0;
-}
-
-/* DO NOT hold the q mutex before call this function */
-void uacce_put_svas(struct uacce_queue *q)
-{
-	struct uacce_svas *svas;
-
-	mutex_lock(&q->mutex);
-	svas = q->svas;
-	q->svas = NULL;
-	mutex_unlock(&q->mutex);
-
-	if (!svas)
-		return;
-
-	mutex_lock(&svas->mutex);
-	list_del(&q->list);
-	mutex_unlock(&svas->mutex);
-
-	uacce_put_svas_no_q(svas);
-}
-EXPORT_SYMBOL_GPL(uacce_put_svas);
 
 static long uacce_cmd_share_svas(struct uacce_queue *tgt, int fd)
 {
 	struct file *filep = fget(fd);
 	struct uacce_queue *src;
+	int ret;
 
 	if (!filep || filep->f_op != &uacce_fops)
 		return -EINVAL;
@@ -124,7 +68,23 @@ static long uacce_cmd_share_svas(struct uacce_queue *tgt, int fd)
 	if (!src)
 		return -EINVAL;
 
-	return uacce_share_svas(tgt, src);
+	write_lock(&uacce_lock);
+	if (!src->svas || tgt->svas) {
+		dev_warn(tgt->uacce->dev,
+		       "tgt should have svas and src should not\n");
+		ret = -EINVAL;
+		goto err;
+	}
+
+	tgt->svas = src->svas;
+	list_add(&tgt->list, &src->svas->qs);
+
+	write_unlock(&uacce_lock);
+	return 0;
+
+err:
+	write_unlock(&uacce_lock);
+	return ret;
 }
 
 static long uacce_fops_unl_ioctl(struct file *filep,
@@ -166,7 +126,9 @@ static int inline uacce_iommu_map_shm_pages(struct uacce_queue *q)
 	if (!domain)
 		return -ENODEV;
 
-	mutex_lock(&svas->mutex);
+	if (!svas)
+		return 0;
+
 	for (i=0; i < svas->nr_pages; i++) {
 		get_page(svas->pages[i]);
 		ret = iommu_map(domain, svas->va + i * PAGE_SIZE,
@@ -175,7 +137,6 @@ static int inline uacce_iommu_map_shm_pages(struct uacce_queue *q)
 		if (ret)
 			goto err_with_map_pages;
 	}
-	mutex_unlock(&svas->mutex);
 
 	return 0;
 
@@ -184,7 +145,6 @@ err_with_map_pages:
 		iommu_unmap(domain, svas->va + j * PAGE_SIZE, PAGE_SIZE);
 		put_page(svas->pages[j]);
 	}
-	mutex_unlock(&svas->mutex);
 	return ret;
 }
 
@@ -195,15 +155,13 @@ static inline void uacce_iommu_unmap_shm_pages(struct uacce_queue *q)
 	struct iommu_domain * domain = iommu_get_domain_for_dev(dev);
 	int i;
 
-	if (domain)
+	if (!domain || !svas)
 		return;
 
-	mutex_lock(&svas->mutex);
 	for (i=svas->nr_pages-1; i>=0; i--) {
 		iommu_unmap(domain, svas->va + i * PAGE_SIZE, PAGE_SIZE);
 		put_page(svas->pages[i]);
 	}
-	mutex_lock(&svas->mutex);
 }
 
 static int uacce_map_shm_on_queue(struct uacce_queue *q)
@@ -225,16 +183,14 @@ static int uacce_map_shm_on_queue(struct uacce_queue *q)
 
 static void uacce_unmap_shm_on_queue(struct uacce_queue *q)
 {
-	struct uacce_svas *svas = q->svas;
-
-	if (!svas->va || q->mapped_shm)
+	if (q->mapped_shm)
 		return;
 
 	if (q->uacce->ops->map) {
 		if (q->uacce->ops->unmap)
 			q->uacce->ops->unmap(q);
 	} else
-		uacce_iommu_map_shm_pages(q);
+		uacce_iommu_unmap_shm_pages(q);
 }
 
 static int uacce_fops_open(struct inode *inode, struct file *filep)
@@ -261,7 +217,6 @@ static int uacce_fops_open(struct inode *inode, struct file *filep)
 
 	q->uacce = uacce;
 	init_waitqueue_head(&q->wait);
-	mutex_init(&q->mutex);
 	filep->private_data = q;
 
 	if (uacce->ops->start_queue) {
@@ -289,10 +244,10 @@ static vm_fault_t uacce_shm_vm_fault(struct vm_fault *vmf)
 	if (page_offset >= svas->nr_pages)
 		return VM_FAULT_SIGBUS;
 
-	mutex_lock(&svas->mutex);
+	read_lock(&uacce_lock);
 	get_page(svas->pages[page_offset]);
 	vmf->page = svas->pages[page_offset];
-	mutex_unlock(&svas->mutex);
+	read_unlock(&uacce_lock);
 
 	return 0;
 }
@@ -311,8 +266,16 @@ static int uacce_fops_release(struct inode *inode, struct file *filep)
 	if (uacce->ops->stop_queue)
 		uacce->ops->stop_queue(q);
 
+	write_lock(&uacce_lock);
 	uacce_unmap_shm_on_queue(q);
-	uacce_put_svas(q);
+	if (q->svas) {
+		if (q->list.next)
+			list_del(&q->list);
+		if (list_empty(&q->svas->qs))
+			uacce_free_svas(q->svas);
+		q->svas = NULL;
+	}
+	write_unlock(&uacce_lock);
 
 	if (uacce->ops->put_queue)
 		uacce->ops->put_queue(q);
@@ -320,65 +283,68 @@ static int uacce_fops_release(struct inode *inode, struct file *filep)
 	return 0;
 }
 
-static int uacce_create_shm_pages(struct uacce_svas *svas,
+static int uacce_create_shm_pages(struct uacce_queue *q,
 				  struct vm_area_struct *vma)
 {
-	struct uacce_queue *q;
 	int i, j, ret = 0;
-	LIST_HEAD(mapped);
 
-	mutex_lock(&svas->mutex);
+	write_lock(&uacce_lock);
+	if (!q->svas)
+		q->svas = uacce_alloc_svas();
 
-	if (svas->va) {
+	if (!q->svas) {
+		ret = -ENOMEM;
+		goto err_with_lock;
+	}
+
+	if (q->svas->va) {
 		ret = -EBUSY;
 		goto err_with_lock;
 	}
 
-	svas->va = vma->vm_start;
-	svas->nr_pages = (vma->vm_end - vma->vm_start) >> PAGE_SHIFT;
+	q->svas->va = vma->vm_start;
+	q->svas->nr_pages = (vma->vm_end - vma->vm_start) >> PAGE_SHIFT;
 
 	if (vma->vm_flags & VM_READ)
-		svas->prot |= IOMMU_READ;
+		q->svas->prot |= IOMMU_READ;
 
 	if (vma->vm_flags & VM_WRITE)
-		svas->prot |= IOMMU_WRITE;
+		q->svas->prot |= IOMMU_WRITE;
 
-	svas->pages = kzalloc(sizeof(*svas->pages) * svas->nr_pages,
-			       GFP_KERNEL);
-	if (!svas->pages) {
+	q->svas->pages = kzalloc(sizeof(*q->svas->pages) * q->svas->nr_pages,
+			       GFP_KERNEL | GFP_ATOMIC);
+	if (!q->svas->pages) {
 		ret = -ENOMEM;
 		goto err_with_init;
 	}
 
-	for (i=0; i < svas->nr_pages; i++) {
-		svas->pages[i] = alloc_page(GFP_KERNEL);
-		if (!svas->pages[i])
+	for (i=0; i < q->svas->nr_pages; i++) {
+		q->svas->pages[i] = alloc_page(GFP_KERNEL | GFP_ATOMIC);
+		if (!q->svas->pages[i])
 			goto err_with_pages;
 	}
 
-	list_for_each_entry(q, &svas->qs, list) {
-		ret = uacce_map_shm_on_queue(q);
-		if (ret)
-			goto err_with_mapped_queue;
-	}
+	ret = uacce_map_shm_on_queue(q);
+	if (ret)
+		goto err_with_pages;
 
-	mutex_unlock(&svas->mutex);
+	vma->vm_ops = &uacce_shm_vm_ops;
+	vma->vm_private_data = q->svas;
+	list_add(&q->list, &q->svas->qs);
+
+	write_unlock(&uacce_lock);
 	return 0;
 
-err_with_mapped_queue:
-	list_for_each_entry(q, &svas->qs, list) {
-		uacce_unmap_shm_on_queue(q);
-	}
 err_with_pages:
 	for (j=i-1; j>=0; j--) {
-		put_page(svas->pages[j]);
-		svas->pages[j] = NULL;
+		put_page(q->svas->pages[j]);
+		q->svas->pages[j] = NULL;
 	}
 err_with_init:
-	svas->va = 0;
-	svas->nr_pages = 0;
+	q->svas->va = 0;
+	q->svas->nr_pages = 0;
 err_with_lock:
-	mutex_unlock(&svas->mutex);
+	write_unlock(&uacce_lock);
 	return ret;
 }
 
@@ -386,22 +352,12 @@ static int uacce_fops_mmap(struct file *filep, struct vm_area_struct *vma)
 {
 	struct uacce_queue *q = (struct uacce_queue *)filep->private_data;
 	struct uacce *uacce = q->uacce;
-	struct uacce_svas *svas;
 	int ret;
 
-	mutex_lock(&q->mutex);
-
 	if (uacce->io_nr_pages !=0 && vma->vm_pgoff >= uacce->io_nr_pages) {
-		svas = uacce_get_svas(q);
-		if (IS_ERR(svas))
-			return PTR_ERR(svas);
-
-		vma->vm_ops = &uacce_shm_vm_ops;
-		vma->vm_private_data = svas;
-
 		dev_info(uacce->dev, "map share memory (off=%lx)\n",
 			 vma->vm_pgoff);
-		ret = uacce_create_shm_pages(svas, vma);
+		ret = uacce_create_shm_pages(q, vma);
 	}else if (uacce->ops->mmap) {
 		vma->vm_flags |= VM_DONTCOPY | VM_DONTEXPAND;
 		dev_info(uacce->dev, "map accelerator io space (off=%lx)\n",
@@ -412,21 +368,19 @@ static int uacce_fops_mmap(struct file *filep, struct vm_area_struct *vma)
 		ret = -ENODEV;
 	}
 
-	mutex_unlock(&q->mutex);
 	return ret;
 }
 
 static __poll_t uacce_fops_poll(struct file *file, poll_table *wait)
 {
-	struct uacce_queue *q =
-		(struct uacce_queue *)file->private_data;
+	struct uacce_queue *q = (struct uacce_queue *)file->private_data;
 	struct uacce *uacce = q->uacce;
 
 	poll_wait(file, &q->wait, wait);
-	if (uacce->ops->is_q_updated(q))
+	if (uacce->ops->is_q_updated && uacce->ops->is_q_updated(q))
 		return EPOLLIN | EPOLLRDNORM;
-
-	return 0;
+	else
+		return 0;
 }
 
 static const struct file_operations uacce_fops = {

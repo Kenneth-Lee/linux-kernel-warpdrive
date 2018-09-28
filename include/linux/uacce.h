@@ -15,9 +15,6 @@ struct uacce;
 
 /* address space struct, allocated per process */
 struct uacce_svas {
-	struct mutex mutex;
-	atomic_t refcount;
-
 	/* todo: support multiple section in the future */
 	struct page **pages;
 	unsigned long va;
@@ -59,7 +56,6 @@ struct uacce_ops {
 };
 
 struct uacce_queue {
-	struct mutex mutex;
 	struct uacce *uacce;
 	__u32 flags;
 	void *priv;
