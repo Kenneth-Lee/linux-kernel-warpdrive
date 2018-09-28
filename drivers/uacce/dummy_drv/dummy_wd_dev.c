@@ -43,7 +43,6 @@ struct dummy_hw_queue {
 	bool used;
 	struct task_struct *tsk;
 	__u32 tail;
-	int updated;
 	void *vmap;
 
 	struct uacce_queue wdq;
@@ -51,6 +50,7 @@ struct dummy_hw_queue {
 	struct dummy_hw *hw;
 	struct task_struct *work_thread;
 	struct mutex mutex;
+	int is_updated;
 	int devid, qid;
 };
 
@@ -64,13 +64,10 @@ static struct dummy_hw {
 static int _do_copy(struct uacce_queue *q, void *tgt, void *src, size_t len)
 {
 	struct dummy_hw_queue *hwq = (struct dummy_hw_queue *)q->priv;
-	struct uacce_svas *svas = uacce_get_svas(q);
 	int ret = 0;
-	size_t ktgt = (unsigned long)tgt - svas->va;
-	size_t ksrc = (unsigned long)src - svas->va;
+	size_t ktgt = (unsigned long)tgt - q->svas->va;
+	size_t ksrc = (unsigned long)src - q->svas->va;
 	size_t range = q->svas->nr_pages << PAGE_SHIFT;
-
-	mutex_lock(&svas->mutex);
 
 	if (ktgt > range || ktgt + len> range) {
 		ret = -EINVAL;
@@ -85,12 +82,10 @@ static int _do_copy(struct uacce_queue *q, void *tgt, void *src, size_t len)
 	ktgt += (unsigned long)hwq->vmap;
 	ksrc += (unsigned long)hwq->vmap;
 	dummy_log("memcpy(%lx, %lx, %lx), va=%lx, kva=%lx\n", ktgt, ksrc, len,
-		svas->va, (unsigned long)hwq->vmap);
+		q->svas->va, (unsigned long)hwq->vmap);
 	memcpy((void *)ktgt, (void *)ksrc, len);
 
 out:
-	mutex_unlock(&svas->mutex);
-	uacce_put_svas(q);
 	return ret;
 }
 
@@ -133,7 +128,7 @@ static void _queue_work(struct dummy_hw_queue *hwq)
 	if (tail != hwq->tail) {
 		dummy_log("write back tail %d\n", hwq->tail);
 		writel(hwq->tail, &hwq->reg->tail);
-		hwq->updated = 1;
+		hwq->is_updated = 1;
 		uacce_wake_up(&hwq->wdq);
 	}
 
@@ -143,7 +138,18 @@ static void _queue_work(struct dummy_hw_queue *hwq)
 static int dummy_is_q_updated(struct uacce_queue *q)
 {
 	struct dummy_hw_queue *hwq = q->priv;
-	return hwq->updated;
+	int updated;
+
+	mutex_lock(&hwq->mutex);
+
+	updated = hwq->is_updated;
+	hwq->is_updated = 0;
+
+	mutex_unlock(&hwq->mutex);
+
+	dummy_log("check q updated: %d\n", updated);
+
+	return updated;
 }
 
 static void dummy_init_hw_queue(struct dummy_hw_queue *hwq, int used, int devid,
@@ -161,7 +167,7 @@ static void dummy_init_hw_queue(struct dummy_hw_queue *hwq, int used, int devid,
 		writel(0, &hwq->reg->head);
 		writel(0, &hwq->reg->tail);
 		hwq->tail = 0;
-		hwq->updated = 0;
+		hwq->is_updated = 0;
 		if (devid >= 0)
 			hwq->devid = devid;
 		if (qid >= 0)
@@ -226,16 +232,14 @@ static int dummy_mmap(struct uacce_queue *q, struct vm_area_struct *vma)
 
 static int dummy_map(struct uacce_queue *q) {
 	struct dummy_hw_queue *hwq = (struct dummy_hw_queue *)q->priv;
-	struct uacce_svas *svas = uacce_get_svas(q);
 
-	mutex_lock(&svas->mutex);
-	hwq->vmap = vmap(svas->pages, svas->nr_pages, VM_MAP, PAGE_KERNEL);
-	mutex_unlock(&svas->mutex);
-
-	uacce_put_svas(q);
+	hwq->vmap = vmap(q->svas->pages, q->svas->nr_pages,
+			 VM_MAP, PAGE_KERNEL);
 
 	if (!hwq->vmap)
 		return -ENOMEM;
+
+	dummy_log("vmap virutal address to %lx\n", (unsigned long)hwq->vmap);
 
 	return 0;
 }
@@ -273,6 +277,7 @@ int queue_worker(void *data) {
 		_queue_work(hwq);
 		schedule_timeout_interruptible(msecs_to_jiffies(QUEUE_YEILD_MS));
 	} while (!kthread_should_stop());
+	hwq->work_thread = NULL;
 	return 0;
 }
 
@@ -290,11 +295,10 @@ static int dummy_start_queue(struct uacce_queue *q)
 
 int dummy_stop_queue(struct uacce_queue *q) {
 	struct dummy_hw_queue *hwq = q->priv;
-	int ret;
 
-	ret = kthread_stop(hwq->work_thread);
-	dummy_log("queue worker (%d, %d) stopped (ret=%d)\n",
-		hwq->devid, hwq->qid, ret);
+	if (hwq->work_thread)
+		return kthread_stop(hwq->work_thread);
+
 	return 0;
 }
 
