@@ -20,6 +20,7 @@ struct uacce_svas {
 	unsigned long va;
 	int nr_pages;
 	int prot;
+	struct mm_struct *mm;
 
 	struct list_head list;
 	struct list_head qs;

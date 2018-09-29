@@ -8,6 +8,7 @@
 #include <linux/wait.h>
 #include <linux/slab.h>
 #include <linux/file.h>
+#include <linux/sched/signal.h>
 
 static struct class *uacce_class;
 static DEFINE_IDR(uacce_idr);
@@ -38,6 +39,7 @@ static struct uacce_svas *uacce_alloc_svas(void)
 	if (!svas)
 		return ERR_PTR(-ENOMEM);
 
+	svas->mm = current->mm;
 	INIT_LIST_HEAD(&svas->qs);
 
 	return svas;
@@ -50,6 +52,10 @@ static void uacce_free_svas(struct uacce_svas *svas)
 	if (svas->pages) {
 		for (i = 0; i < svas->nr_pages; i++)
 			put_page(svas->pages[i]);
+
+		down_write(&svas->mm->mmap_sem);
+		svas->mm->data_vm -= svas->nr_pages;
+		up_write(&svas->mm->mmap_sem);
 		kfree(svas->pages);
 	}
 	kfree(svas);
@@ -305,6 +311,13 @@ static int uacce_create_shm_pages(struct uacce_queue *q,
 	q->svas->va = vma->vm_start;
 	q->svas->nr_pages = (vma->vm_end - vma->vm_start) >> PAGE_SHIFT;
 
+	if (q->svas->mm->data_vm + q->svas->nr_pages >
+	    rlimit(RLIMIT_DATA) >> PAGE_SHIFT) {
+		ret = -ENOMEM;
+		goto err_with_lock;
+	}
+	q->svas->mm->data_vm += q->svas->nr_pages;
+
 	if (vma->vm_flags & VM_READ)
 		q->svas->prot |= IOMMU_READ;
 
@@ -343,6 +356,7 @@ err_with_pages:
 err_with_init:
 	q->svas->va = 0;
 	q->svas->nr_pages = 0;
+	q->svas->mm->data_vm -= q->svas->nr_pages;
 err_with_lock:
 	write_unlock(&uacce_lock);
 	return ret;
