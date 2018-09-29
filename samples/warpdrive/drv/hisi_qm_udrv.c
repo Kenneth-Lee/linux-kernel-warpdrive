@@ -221,3 +221,14 @@ int hisi_qm_get_from_dio_q(struct wd_queue *q, void **resp)
 
 	return ret;
 }
+
+void *hisi_qm_preserve_mem(struct wd_queue *q, size_t size)
+{
+	void *mem = mmap(0, size, PROT_READ | PROT_WRITE, MAP_SHARED,
+			 q->fd, PAGE_SIZE);
+
+	if (mem == MAP_FAILED)
+		return NULL;
+	else
+		return mem;
+}

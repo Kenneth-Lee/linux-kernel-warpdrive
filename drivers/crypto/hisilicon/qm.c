@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0+
 #include <asm/page.h>
+#include <linux/uacce.h>
 #include <linux/bitmap.h>
 #include <linux/dma-mapping.h>
 #include <linux/io.h>
@@ -667,50 +668,35 @@ int hisi_qp_send(struct hisi_qp *qp, void *msg)
 }
 EXPORT_SYMBOL_GPL(hisi_qp_send);
 
-#ifdef CONFIG_CRYPTO_DEV_HISI_SPIMDEV
-/* mdev->supported_type_groups */
-static struct attribute *hisi_qm_type_attrs[] = {
-	VFIO_SPIMDEV_DEFAULT_MDEV_TYPE_ATTRS,
-	NULL,
-};
-static struct attribute_group hisi_qm_type_group = {
-	.attrs = hisi_qm_type_attrs,
-};
-static struct attribute_group *mdev_type_groups[] = {
-	&hisi_qm_type_group,
-	NULL,
-};
-
 static void qm_qp_event_notifier(struct hisi_qp *qp)
 {
-	vfio_spimdev_wake_up(qp->spimdev_q);
+	uacce_wake_up(qp->uacce_q);
 }
 
-static int hisi_qm_get_queue(struct vfio_spimdev *spimdev, unsigned long arg,
-			  struct vfio_spimdev_queue **q)
+static int hisi_qm_get_queue(struct uacce *uacce, unsigned long arg,
+			     struct uacce_queue **q)
 {
-	struct qm_info *qm = spimdev->priv;
+	struct qm_info *qm = uacce->priv;
 	struct hisi_qp *qp = NULL;
-	struct vfio_spimdev_queue *wd_q;
+	struct uacce_queue *wd_q;
 	u8 alg_type = 0; /* fix me here */
-	int ret;
 	int pasid = arg;
+	int ret;
 
 	qp = hisi_qm_create_qp(qm, alg_type);
 	if (IS_ERR(qp))
 		return PTR_ERR(qp);
 
-	wd_q = kzalloc(sizeof(struct vfio_spimdev_queue), GFP_KERNEL);
+	wd_q = kzalloc(sizeof(struct uacce_queue), GFP_KERNEL);
 	if (!wd_q) {
 		ret = -ENOMEM;
 		goto err_with_qp;
 	}
 
 	wd_q->priv = qp;
-	wd_q->spimdev = spimdev;
-	wd_q->qid = (u16)ret;
+	wd_q->uacce = uacce;
 	*q = wd_q;
-	qp->spimdev_q = wd_q;
+	qp->uacce_q = wd_q;
 	qp->event_cb = qm_qp_event_notifier;
 
 	ret = hisi_qm_start_qp(qp, arg);
@@ -726,7 +712,7 @@ err_with_qp:
 	return ret;
 }
 
-static int hisi_qm_put_queue(struct vfio_spimdev_queue *q)
+static int hisi_qm_put_queue(struct uacce_queue *q)
 {
 	struct hisi_qp *qp = q->priv;
 
@@ -737,7 +723,8 @@ static int hisi_qm_put_queue(struct vfio_spimdev_queue *q)
 }
 
 /* map sq/cq/doorbell to user space */
-static int hisi_qm_mmap(struct vfio_spimdev_queue *q,
+/* fix me */
+static int hisi_qm_mmap(struct uacce_queue *q,
 			struct vm_area_struct *vma)
 {
 	struct hisi_qp *qp = (struct hisi_qp *)q->priv;
@@ -747,7 +734,7 @@ static int hisi_qm_mmap(struct vfio_spimdev_queue *q,
 	u8 region;
 
 	vma->vm_flags |= (VM_IO | VM_LOCKED | VM_DONTEXPAND | VM_DONTDUMP);
-	region = _VFIO_SPIMDEV_REGION(vma->vm_pgoff);
+	/* fix me: region = _VFIO_SPIMDEV_REGION(vma->vm_pgoff); */
 
 	switch (region) {
 	case 0:
@@ -773,39 +760,39 @@ static int hisi_qm_mmap(struct vfio_spimdev_queue *q,
 	}
 }
 
-static const struct vfio_spimdev_ops qm_ops = {
+static const struct uacce_ops uacce_qm_ops = {
 	.get_queue = hisi_qm_get_queue,
 	.put_queue = hisi_qm_put_queue,
 	.mmap = hisi_qm_mmap,
 };
 
-static int qm_register_spimdev(struct qm_info *qm)
+/* fix me */
+static int qm_register_uacce(struct qm_info *qm)
 {
 	struct pci_dev *pdev = qm->pdev;
-	struct vfio_spimdev *spimdev = &qm->spimdev;
+	struct uacce *uacce = &qm->uacce;
 
-	spimdev->iommu_type = VFIO_TYPE1_IOMMU;
+	/* fime me */
+	uacce->iommu_type = 0;
 #ifdef CONFIG_IOMMU_SVA
-	spimdev->dma_flag = VFIO_SPIMDEV_DMA_MULTI_PROC_MAP;
+	/* fime me */
+	uacce->dma_flag = 0;
 #else
-	spimdev->dma_flag = VFIO_SPIMDEV_DMA_SINGLE_PROC_MAP;
+	/* fime me */
+	uacce->dma_flag = 0;
 #endif
-	spimdev->owner = THIS_MODULE;
-	spimdev->name = qm->dev_name;
-	spimdev->dev = &pdev->dev;
-	spimdev->is_vf = pdev->is_virtfn;
-	spimdev->priv = qm;
-	spimdev->api_ver = "hisi_qm_v1";
-	spimdev->flags = 0;
+	uacce->owner = THIS_MODULE;
+	uacce->name = qm->dev_name;
+	uacce->dev = &pdev->dev;
+	uacce->is_vf = pdev->is_virtfn;
+	uacce->priv = qm;
+	uacce->api_ver = "hisi_qm_v1";
+	uacce->flags = 0;
 
-	spimdev->mdev_fops.mdev_attr_groups = qm->mdev_dev_groups;
-	hisi_qm_type_group.name = qm->dev_name;
-	spimdev->mdev_fops.supported_type_groups = mdev_type_groups;
-	spimdev->ops = &qm_ops;
+	uacce->ops = &uacce_qm_ops;
 
-	return vfio_spimdev_register(spimdev);
+	return uacce_register(uacce);
 }
-#endif
 
 int hisi_qm_init(const char *dev_name, struct qm_info *qm)
 {
@@ -944,10 +931,10 @@ int hisi_qm_start(struct qm_info *qm)
 	if (ret)
 		goto err_with_cqc;
 
-#ifdef CONFIG_CRYPTO_DEV_HISI_SPIMDEV
-	ret = qm_register_spimdev(qm);
+#ifdef CONFIG_UACCE
+	ret = qm_register_uacce(qm);
 	if (ret)
-		goto err_with_irq;
+		goto err_with_cqc;
 #endif
 
 	writel(0x0, QM_ADDR(qm, QM_VF_EQ_INT_MASK));
@@ -976,8 +963,8 @@ void hisi_qm_stop(struct qm_info *qm)
 	struct pci_dev *pdev = qm->pdev;
 	struct device *dev = &pdev->dev;
 
-#ifdef CONFIG_CRYPTO_DEV_HISI_SPIMDEV
-	vfio_spimdev_unregister(&qm->spimdev);
+#ifdef CONFIG_UACCE
+	uacce_unregister(&qm->uacce);
 #endif
 
 	free_irq(pci_irq_vector(pdev, 0), qm);

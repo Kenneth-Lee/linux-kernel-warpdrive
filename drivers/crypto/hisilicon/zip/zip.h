@@ -15,8 +15,8 @@ struct hisi_zip {
 	struct qm_info qm;
 	struct list_head list;
 
-#ifdef CONFIG_CRYPTO_DEV_HISI_SPIMDEV
-	struct vfio_spimdev *spimdev;
+#ifdef CONFIG_UACCE
+	struct uacce *uacce;
 #endif
 };
 

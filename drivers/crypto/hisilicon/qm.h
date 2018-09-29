@@ -8,8 +8,8 @@
 #include <linux/pci.h>
 #include <linux/slab.h>
 
-#ifdef CONFIG_CRYPTO_DEV_HISI_SPIMDEV
-#include <linux/vfio_spimdev.h>
+#ifdef CONFIG_UACCE
+#include <linux/uacce.h>
 #endif
 
 #define QM_CQE_SIZE			16
@@ -63,9 +63,8 @@ struct qm_info {
 
 	struct hisi_acc_qm_hw_ops *ops;
 
-#ifdef CONFIG_CRYPTO_DEV_HISI_SPIMDEV
-	struct vfio_spimdev spimdev;
-	const struct attribute_group **mdev_dev_groups;
+#ifdef CONFIG_UACCE
+	struct uacce uacce;
 #endif
 };
 #define QM_ADDR(qm, off) ((qm)->io_base + off)
@@ -98,8 +97,8 @@ struct hisi_qp {
 
 	struct qm_info *qm;
 
-#ifdef CONFIG_CRYPTO_DEV_HISI_SPIMDEV
-	struct vfio_spimdev_queue *spimdev_q;
+#ifdef CONFIG_UACCE
+	struct uacce_queue *uacce_q;
 #endif
 
 	/* for crypto sync API */

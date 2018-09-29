@@ -14,6 +14,8 @@ static struct wd_drv_dio_if hw_dio_tbl[] = { {
 		.close = hisi_qm_unset_queue_dio,
 		.send = hisi_qm_add_to_dio_q,
 		.recv = hisi_qm_get_from_dio_q,
+		.flush = NULL,
+		.preserve_mem = hisi_qm_preserve_mem,
 	}, {
 		.hw_type = "wd_dummy_v1",
 		.open = dummy_set_queue_dio,

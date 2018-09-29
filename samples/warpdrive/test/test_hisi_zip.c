@@ -19,7 +19,7 @@
 #define PAGE_SHIFT	12
 #define PAGE_SIZE	(1 << PAGE_SHIFT)
 
-#define ASIZE (8*512*4096)	/*16MB*/
+#define ASIZE (8 * 512 * 4096)	/* 16MB */
 
 #define SYS_ERR_COND(cond, msg)		\
 do {					\
@@ -65,43 +65,21 @@ int hizip_deflate(FILE *source, FILE *dest,  int type)
 		ret = -EINVAL;
 		SYS_ERR_COND(ret, "input file length zero");
 	}
-	if (total_len > 16*1024*1024) {
+	if (total_len > 16 * 1024 * 1024) {
 		fputs("error, input file size too large(<16MB)!\n", stderr);
 		goto release_q;
 	}
-	file_msize = !(total_len%PAGE_SIZE) ? total_len :
-			(total_len/PAGE_SIZE+1)*PAGE_SIZE;
-	/* mmap file and  DMA mapping */
-	a = mmap((void *)0x0, file_msize, PROT_READ | PROT_WRITE,
-		 MAP_PRIVATE, fd, 0);
-	if (!a) {
-		fputs("mmap file fail!\n", stderr);
-		goto release_q;
-	}
-#ifdef TO_BE_UPDATED
-	ret = wd_mem_share(&q, a, file_msize, 0);
-	if (ret) {
-		fprintf(stderr, "wd_mem_share dma a buf fail!err=%d\n", -errno);
-		goto unmap_file;
-	}
-#endif
-	/* Allocate some space and setup a DMA mapping */
-	b = mmap((void *)0x0, ASIZE, PROT_READ | PROT_WRITE,
-		 MAP_PRIVATE | MAP_ANONYMOUS, 0, 0);
+
+	/* fix me: share data buffer */
+	b = wd_preserve_share_memory(q, ASIZE);
 	if (!b) {
 		fputs("mmap b fail!\n", stderr);
 		goto unshare_file;
 	}
 	memset(b, 0, ASIZE);
-#ifdef TO_BE_UPDATED
-	ret = wd_mem_share(&q, b, ASIZE, 0);
-	if (ret) {
-		fputs("wd_mem_share dma b buf fail!\n", stderr);
-		goto unmap_mem;
-	}
-#endif
-	src = (char *)a;
-	dst = (char *)b;
+
+	src = (char *)b;
+	dst = (char *)b + ASIZE / 2;
 
 	msg = malloc(sizeof(*msg));
 	if (!msg) {
@@ -149,16 +127,11 @@ recv_again:
 
 	free(msg);
 alloc_msg_fail:
-#ifdef TO_BE_UPDATED
-	wd_mem_unshare(&q, b, ASIZE);
-unmap_mem:
-#endif
+
+/* fime me: unmap */
 	munmap(b, ASIZE);
 unshare_file:
-#ifdef TO_BE_UPDATED
-	wd_mem_unshare(&q, a, file_msize);
-unmap_file:
-#endif
+/* fime me: unmap */
 	munmap(a, file_msize);
 release_q:
 	wd_release_queue(&q);
