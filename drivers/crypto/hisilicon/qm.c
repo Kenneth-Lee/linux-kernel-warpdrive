@@ -723,7 +723,6 @@ static int hisi_qm_put_queue(struct uacce_queue *q)
 }
 
 /* map sq/cq/doorbell to user space */
-/* fix me */
 static int hisi_qm_mmap(struct uacce_queue *q,
 			struct vm_area_struct *vma)
 {
@@ -734,7 +733,7 @@ static int hisi_qm_mmap(struct uacce_queue *q,
 	u8 region;
 
 	vma->vm_flags |= (VM_IO | VM_LOCKED | VM_DONTEXPAND | VM_DONTDUMP);
-	/* fix me: region = _VFIO_SPIMDEV_REGION(vma->vm_pgoff); */
+	region = vma->vm_pgoff;
 
 	switch (region) {
 	case 0:
@@ -788,7 +787,8 @@ static int qm_register_uacce(struct qm_info *qm)
 	uacce->priv = qm;
 	uacce->api_ver = "hisi_qm_v1";
 	uacce->flags = 0;
-
+	uacce->io_nr_pages = (qm->size + (qm->sqe_size + sizeof(struct cqe)) *
+					QM_Q_DEPTH) >> PAGE_SHIFT;
 	uacce->ops = &uacce_qm_ops;
 
 	return uacce_register(uacce);
