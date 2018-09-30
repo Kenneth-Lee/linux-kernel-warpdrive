@@ -19,7 +19,7 @@
 #define PAGE_SHIFT	12
 #define PAGE_SIZE	(1 << PAGE_SHIFT)
 
-#define ASIZE (8 * 512 * 4096)	/* 16MB */
+#define ASIZE (16 * 1024 * 1024)	/* 16MB */
 
 #define SYS_ERR_COND(cond, msg)		\
 do {					\
@@ -32,9 +32,6 @@ do {					\
 #define ZLIB 0
 #define GZIP 1
 
-#define CHUNK 65535
-
-
 int hizip_deflate(FILE *source, FILE *dest,  int type)
 {
 	__u64 in, out;
@@ -44,7 +41,7 @@ int hizip_deflate(FILE *source, FILE *dest,  int type)
 	char *src, *dst;
 	int ret, total_len;
 	int output_num;
-	int fd, file_msize;
+	int fd;
 
 	q.dev_path = "/dev/ua1";
 	ret = wd_request_queue(&q);
@@ -71,15 +68,20 @@ int hizip_deflate(FILE *source, FILE *dest,  int type)
 	}
 
 	/* fix me: share data buffer */
-	b = wd_preserve_share_memory(q, ASIZE);
-	if (!b) {
-		fputs("mmap b fail!\n", stderr);
+	a = wd_preserve_share_memory(q, ASIZE * 2);
+	if (!a) {
+		fputs("mmap a fail!\n", stderr);
 		goto unshare_file;
 	}
-	memset(b, 0, ASIZE);
+	memset(a, 0, ASIZE * 2);
 
-	src = (char *)b;
-	dst = (char *)b + ASIZE / 2;
+	src = (char *)a;
+	dst = (char *)a + ASIZE / 2;
+
+	fread(src, 1, total_len, source);
+	if (ferror(source))
+		return -1;
+	fclose(source);
 
 	msg = malloc(sizeof(*msg));
 	if (!msg) {

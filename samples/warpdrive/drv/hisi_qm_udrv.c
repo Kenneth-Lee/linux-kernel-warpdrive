@@ -224,8 +224,10 @@ int hisi_qm_get_from_dio_q(struct wd_queue *q, void **resp)
 
 void *hisi_qm_preserve_mem(struct wd_queue *q, size_t size)
 {
+	off_t offset = (QM_SQE_SIZE + QM_CQE_SIZE) * QM_EQ_DEPTH + 4096;
+
 	void *mem = mmap(0, size, PROT_READ | PROT_WRITE, MAP_SHARED,
-			 q->fd, PAGE_SIZE);
+			 q->fd, offset);
 
 	if (mem == MAP_FAILED)
 		return NULL;
