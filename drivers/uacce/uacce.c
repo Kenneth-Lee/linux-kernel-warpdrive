@@ -138,8 +138,8 @@ static int inline uacce_iommu_map_shm_pages(struct uacce_queue *q)
 	for (i=0; i < svas->nr_pages; i++) {
 		get_page(svas->pages[i]);
 		ret = iommu_map(domain, svas->va + i * PAGE_SIZE,
-				page_to_pfn(svas->pages[i]), PAGE_SIZE,
-				svas->prot);
+				PFN_PHYS(page_to_pfn(svas->pages[i])),
+				PAGE_SIZE, svas->prot | IOMMU_CACHE);
 		if (ret)
 			goto err_with_map_pages;
 	}
@@ -530,7 +530,7 @@ static __exit void uacce_exit(void)
 	idr_destroy(&uacce_idr);
 }
 
-module_init(uacce_init);
+subsys_initcall(uacce_init);
 module_exit(uacce_exit);
 
 MODULE_LICENSE("GPL");

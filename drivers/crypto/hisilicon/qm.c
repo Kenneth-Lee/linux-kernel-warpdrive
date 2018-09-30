@@ -787,7 +787,7 @@ static int qm_register_uacce(struct qm_info *qm)
 	uacce->priv = qm;
 	uacce->api_ver = "hisi_qm_v1";
 	uacce->flags = 0;
-	uacce->io_nr_pages = (qm->size + (qm->sqe_size + sizeof(struct cqe)) *
+	uacce->io_nr_pages = (4096 + (qm->sqe_size + sizeof(struct cqe)) *
 					QM_Q_DEPTH) >> PAGE_SHIFT;
 	uacce->ops = &uacce_qm_ops;
 
