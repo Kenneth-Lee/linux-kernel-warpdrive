@@ -34,14 +34,12 @@ do {					\
 
 int hizip_deflate(FILE *source, FILE *dest,  int type)
 {
-	__u64 in, out;
-	struct wd_queue q;
 	struct hisi_qm_msg *msg, *recv_msg;
-	void *a, *b;
+	struct wd_queue q;
+	__u64 in, out;
+	void *a;
 	char *src, *dst;
-	int ret, total_len;
-	int output_num;
-	int fd;
+	int ret, total_len, output_num, fd;
 
 	q.dev_path = "/dev/ua1";
 	ret = wd_request_queue(&q);
@@ -67,11 +65,10 @@ int hizip_deflate(FILE *source, FILE *dest,  int type)
 		goto release_q;
 	}
 
-	/* fix me: share data buffer */
-	a = wd_preserve_share_memory(q, ASIZE * 2);
+	a = wd_preserve_share_memory(&q, ASIZE * 2);
 	if (!a) {
 		fputs("mmap a fail!\n", stderr);
-		goto unshare_file;
+		goto release_q;
 	}
 	memset(a, 0, ASIZE * 2);
 
@@ -79,14 +76,16 @@ int hizip_deflate(FILE *source, FILE *dest,  int type)
 	dst = (char *)a + ASIZE / 2;
 
 	fread(src, 1, total_len, source);
-	if (ferror(source))
-		return -1;
+	if (ferror(source)) {
+		fputs("read fails!\n", stderr);
+		goto release_q;
+	}
 	fclose(source);
 
 	msg = malloc(sizeof(*msg));
 	if (!msg) {
 		fputs("alloc msg fail!\n", stderr);
-		goto alloc_msg_fail;
+		goto release_q;
 	}
 	memset((void *)msg, 0, sizeof(*msg));
 	msg->input_date_length = total_len;
@@ -113,7 +112,7 @@ int hizip_deflate(FILE *source, FILE *dest,  int type)
 recv_again:
 	ret = wd_recv(&q, (void **)&recv_msg);
 	if (ret == -EIO) {
-		fputs(" wd_recv fail!\n", stderr);
+		fputs("wd_recv fail!\n", stderr);
 		goto alloc_msg_fail;
 	/* synchronous mode, if get none, then get again */
 	} else if (ret == -EAGAIN)
@@ -126,15 +125,12 @@ recv_again:
 	fwrite(zip_head, 1, 2, dest);
 	fwrite((char *)out, 1, output_num, dest);
 	fclose(dest);
-
 	free(msg);
-alloc_msg_fail:
 
-/* fime me: unmap */
-	munmap(b, ASIZE);
-unshare_file:
-/* fime me: unmap */
-	munmap(a, file_msize);
+	return 0;
+
+alloc_msg_fail:
+	free(msg);
 release_q:
 	wd_release_queue(&q);
 
