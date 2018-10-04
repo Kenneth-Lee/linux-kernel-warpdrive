@@ -19,7 +19,12 @@
 #define PAGE_SHIFT	12
 #define PAGE_SIZE	(1 << PAGE_SHIFT)
 
-#define ASIZE (16 * 1024 * 1024)	/* 16MB */
+/*
+ * We have a problem here as va in user space and iova in kernel space are in
+ * different domain. Let's hack it to one page, so the possibility of conflict
+ * will be small, and let code run firtly :(
+ */
+#define ASIZE (4 * 1024) 		/* 4K */
 
 #define SYS_ERR_COND(cond, msg)		\
 do {					\
@@ -42,6 +47,7 @@ int hizip_deflate(FILE *source, FILE *dest,  int type)
 	int ret, total_len, output_num, fd;
 
 	q.dev_path = "/dev/ua1";
+	strncpy(q.hw_type, "hisi_qm_v1", PATH_STR_SIZE);
 	ret = wd_request_queue(&q);
 	SYS_ERR_COND(ret, "wd_request_queue");
 
@@ -73,7 +79,7 @@ int hizip_deflate(FILE *source, FILE *dest,  int type)
 	memset(a, 0, ASIZE * 2);
 
 	src = (char *)a;
-	dst = (char *)a + ASIZE / 2;
+	dst = (char *)a + ASIZE;
 
 	fread(src, 1, total_len, source);
 	if (ferror(source)) {
