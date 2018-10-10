@@ -668,6 +668,7 @@ int hisi_qp_send(struct hisi_qp *qp, void *msg)
 }
 EXPORT_SYMBOL_GPL(hisi_qp_send);
 
+#ifdef CONFIG_UACCE
 static void qm_qp_event_notifier(struct hisi_qp *qp)
 {
 	uacce_wake_up(qp->uacce_q);
@@ -680,7 +681,7 @@ static int hisi_qm_get_queue(struct uacce *uacce, unsigned long arg,
 	struct hisi_qp *qp = NULL;
 	struct uacce_queue *wd_q;
 	u8 alg_type = 0; /* fix me here */
-	int pasid = arg;
+	//int pasid = arg; fixme: set it into device
 	int ret;
 
 	qp = hisi_qm_create_qp(qm, alg_type);
@@ -712,14 +713,13 @@ err_with_qp:
 	return ret;
 }
 
-static int hisi_qm_put_queue(struct uacce_queue *q)
+static void hisi_qm_put_queue(struct uacce_queue *q)
 {
 	struct hisi_qp *qp = q->priv;
 
 	/* need to stop hardware, but can not support in v1 */
 	hisi_qm_release_qp(qp);
 	kfree(q);
-	return 0;
 }
 
 /* map sq/cq/doorbell to user space */
@@ -765,7 +765,6 @@ static const struct uacce_ops uacce_qm_ops = {
 	.mmap = hisi_qm_mmap,
 };
 
-/* fix me */
 static int qm_register_uacce(struct qm_info *qm)
 {
 	struct pci_dev *pdev = qm->pdev;
@@ -793,6 +792,7 @@ static int qm_register_uacce(struct qm_info *qm)
 
 	return uacce_register(uacce);
 }
+#endif
 
 int hisi_qm_init(const char *dev_name, struct qm_info *qm)
 {
