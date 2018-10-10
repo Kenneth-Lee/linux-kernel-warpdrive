@@ -287,7 +287,7 @@ static int dummy_start_queue(struct uacce_queue *q)
 	hwq->work_thread = kthread_run(queue_worker, hwq,
 				       "dummy_queue_worker %d-%d",
 				       hwq->devid, hwq->qid);
-	if (IS_ERR(hwq->work_thread))
+	if (PTR_ERR_OR_ZERO(hwq->work_thread))
 		return PTR_ERR(hwq->work_thread);
 
 	return 0;
