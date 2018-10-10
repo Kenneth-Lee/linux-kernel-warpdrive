@@ -309,7 +309,7 @@ static int uacce_create_shm_pages(struct uacce_queue *q,
 	}
 
 	q->svas->va = vma->vm_start;
-	q->svas->nr_pages = (vma->vm_end - vma->vm_start) >> PAGE_SHIFT;
+	q->svas->nr_pages = vma_pages(vma);
 
 	if (q->svas->mm->data_vm + q->svas->nr_pages >
 	    rlimit(RLIMIT_DATA) >> PAGE_SHIFT) {
@@ -413,10 +413,11 @@ static int uacce_create_chrdev(struct uacce *uacce)
 {
 	int ret;
 
-	uacce->dev_id = idr_alloc(&uacce_idr, uacce, 0, 0, GFP_KERNEL);
-	if (uacce->dev_id < 0)
-		return uacce->dev_id;
+	ret = idr_alloc(&uacce_idr, uacce, 0, 0, GFP_KERNEL);
+	if (ret < 0)
+		return ret;
 
+	uacce->dev_id = ret;
 	uacce->cdev = cdev_alloc();
 	if (!uacce->cdev) {
 		ret = -ENOMEM;
