@@ -223,7 +223,7 @@ static int hisi_zip_copy_data_to_buffer(struct hisi_zip_qp_ctx *qp_ctx,
 static struct hisi_zip_sqe *hisi_zip_get_writeback_sqe(struct hisi_qp *qp)
 {
 	struct hisi_acc_qp_status *qp_status = &qp->qp_status;
-	struct hisi_zip_sqe *sq_base = QP_SQE_ADDR(qp);
+	struct hisi_zip_sqe *sq_base = qp->sqe;
 	u16 sq_head = qp_status->sq_head;
 
 	return sq_base + sq_head;

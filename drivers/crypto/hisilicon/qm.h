@@ -30,12 +30,96 @@
 #define QM_PEH_AXUSER_CFG		0x1000cc
 #define QM_PEH_AXUSER_CFG_ENABLE	0x1000d0
 
-#define QP_SQE_ADDR(qp) ((qp)->scqe.addr)
+struct cqe {
+	__le32 rsvd0;
+	__le16 cmd_id;
+	__le16 rsvd1;
+	__le16 sq_head;
+	__le16 sq_num;
+	__le16 rsvd2;
+	__le16 w7;
+};
 
-struct qm_dma_buffer {
-	int size;
-	void *addr;
-	dma_addr_t dma;
+struct eqe {
+	__le32 dw0;
+};
+
+struct aeqe {
+	__le32 dw0;
+};
+
+struct sqc {
+	__le16 head;
+	__le16 tail;
+	__le32 base_l;
+	__le32 base_h;
+	__le32 dw3;
+	__le16 qes;
+	__le16 rsvd0;
+	__le16 pasid;
+	__le16 w11;
+	__le16 cq_num;
+	__le16 w13;
+	__le32 rsvd1;
+};
+
+struct cqc {
+	__le16 head;
+	__le16 tail;
+	__le32 base_l;
+	__le32 base_h;
+	__le32 dw3;
+	__le16 qes;
+	__le16 rsvd0;
+	__le16 pasid;
+	__le16 w11;
+	__le32 dw6;
+	__le32 rsvd1;
+};
+
+#define INIT_QC(qc, base) do { \
+	(qc)->head = 0; \
+	(qc)->tail = 0; \
+	(qc)->base_l = lower_32_bits((unsigned long)base); \
+	(qc)->base_h = upper_32_bits((unsigned long)base); \
+	(qc)->pasid = 0; \
+	(qc)->w11 = 0; \
+	(qc)->rsvd1 = 0; \
+	(qc)->qes = QM_Q_DEPTH - 1; \
+} while (0)
+
+struct eqc {
+	__le16 head;
+	__le16 tail;
+	__le32 base_l;
+	__le32 base_h;
+	__le32 dw3;
+	__le32 rsvd[2];
+	__le32 dw6;
+};
+
+struct aeqc {
+	__le16 head;
+	__le16 tail;
+	__le32 base_l;
+	__le32 base_h;
+	__le32 rsvd[3];
+	__le32 dw6;
+};
+
+struct mailbox {
+	__le16 w0;
+	__le16 queue_num;
+	__le32 base_l;
+	__le32 base_h;
+	__le32 rsvd;
+};
+
+struct doorbell {
+	__le16 queue_num;
+	__le16 cmd;
+	__le16 index;
+	__le16 priority;
 };
 
 struct qm_info {
@@ -46,12 +130,18 @@ struct qm_info {
 	resource_size_t phys_base;
 	resource_size_t size;
 	void __iomem *io_base;
+	void *smem_base; /* memory shared to device */
 
 	u32 sqe_size;
 	u32 qp_base;
 	u32 qp_num;
 
-	struct qm_dma_buffer sqc, cqc, eqc, eqe, aeqc, aeqe;
+	struct sqc *sqc;
+	struct cqc *cqc;
+	struct eqc *eqc;
+	struct eqe *eqe;
+	struct aeqc *aeqc;
+	struct aeqe *aeqe;
 
 	u32 eq_head;
 
@@ -90,8 +180,10 @@ struct hisi_qp {
 	u8 alg_type;
 	u8 req_type;
 
-	struct qm_dma_buffer sqc, cqc;
-	struct qm_dma_buffer scqe;
+	struct sqc *sqc;
+	struct cqc *cqc;
+	void *sqe;
+	struct cqe *cqe;
 
 	struct hisi_acc_qp_status qp_status;
 
@@ -107,7 +199,7 @@ struct hisi_qp {
 	struct hisi_qp_ops *hw_ops;
 	void *qp_ctx;
 	void (*event_cb)(struct hisi_qp *qp);
-	void (*req_cb)(struct hisi_qp *qp, void *data);
+	void (*req_cb)(struct hisi_qp *qp, unsigned long data);
 };
 
 extern int hisi_qm_init(const char *dev_name, struct qm_info *qm);
