@@ -1,14 +1,14 @@
 /* SPDX-License-Identifier: GPL-2.0+ */
-#include <linux/uacce.h>
 #include <linux/compat.h>
+#include <linux/file.h>
 #include <linux/idr.h>
 #include <linux/list.h>
 #include <linux/module.h>
 #include <linux/poll.h>
-#include <linux/wait.h>
-#include <linux/slab.h>
-#include <linux/file.h>
 #include <linux/sched/signal.h>
+#include <linux/slab.h>
+#include <linux/uacce.h>
+#include <linux/wait.h>
 
 static struct class *uacce_class;
 static DEFINE_IDR(uacce_idr);
@@ -179,8 +179,13 @@ static int uacce_map_shm_on_queue(struct uacce_queue *q)
 		return 0;
 	}
 
-	ret = q->uacce->ops->map ? q->uacce->ops->map(q) :
-				   uacce_iommu_map_shm_pages(q);
+	if (q->uacce->flags & UACCE_DEV_SVA)
+		ret = -EINVAL;
+	else if (q->uacce->flags & UACCE_DEV_NOIOMMU)
+		ret = q->uacce->ops->map ? q->uacce->ops->map(q) : -ENODEV;
+	else
+		ret = uacce_iommu_map_shm_pages(q);
+
 	if (!ret)
 		q->mapped_shm = true;
 
@@ -197,6 +202,21 @@ static void uacce_unmap_shm_on_queue(struct uacce_queue *q)
 			q->uacce->ops->unmap(q);
 	} else
 		uacce_iommu_unmap_shm_pages(q);
+}
+
+static int uacce_sva_check(struct uacce *uacce)
+{
+	if (uacce->flags & (UACCE_DEV_SVA | UACCE_DEV_NOIOMMU))
+		return 0;
+
+	/* The device can be opened once if it dose not support multiple page
+	 * table. The better way to check this is count it per iommu_domain,
+	 * this is just a temporary solution
+	 */
+	if (atomic_add_unless(&uacce->openned, 1, 1))
+		return -EBUSY;
+	
+	return 0;
 }
 
 static int uacce_fops_open(struct inode *inode, struct file *filep)
@@ -217,6 +237,10 @@ static int uacce_fops_open(struct inode *inode, struct file *filep)
 	/* todo: allocate queue pasid and set for this process */
 #endif
 
+	ret = uacce_sva_check(uacce);
+	if (ret)
+		return ret;
+
 	ret = uacce->ops->get_queue(uacce, pasid, &q);
 	if (ret < 0)
 		return ret;
@@ -230,6 +254,8 @@ static int uacce_fops_open(struct inode *inode, struct file *filep)
 		if (ret)
 			goto err_with_queue;
 	}
+
+	__module_get(uacce->owner);
 
 	return 0;
 
@@ -286,6 +312,9 @@ static int uacce_fops_release(struct inode *inode, struct file *filep)
 	if (uacce->ops->put_queue)
 		uacce->ops->put_queue(q);
 	
+	module_put(uacce->owner);
+	atomic_dec(&uacce->openned);
+
 	return 0;
 }
 
@@ -305,7 +334,7 @@ static int uacce_create_shm_pages(struct uacce_queue *q,
 
 	if (q->svas->va) {
 		ret = -EBUSY;
-		goto err_with_lock;
+		goto err_with_svas;
 	}
 
 	q->svas->va = vma->vm_start;
@@ -314,7 +343,7 @@ static int uacce_create_shm_pages(struct uacce_queue *q,
 	if (q->svas->mm->data_vm + q->svas->nr_pages >
 	    rlimit(RLIMIT_DATA) >> PAGE_SHIFT) {
 		ret = -ENOMEM;
-		goto err_with_lock;
+		goto err_with_svas;
 	}
 	q->svas->mm->data_vm += q->svas->nr_pages;
 
@@ -357,6 +386,8 @@ err_with_init:
 	q->svas->va = 0;
 	q->svas->nr_pages = 0;
 	q->svas->mm->data_vm -= q->svas->nr_pages;
+err_with_svas:
+	uacce_free_svas(q->svas);
 err_with_lock:
 	write_unlock(&uacce_lock);
 	return ret;
@@ -368,12 +399,13 @@ static int uacce_fops_mmap(struct file *filep, struct vm_area_struct *vma)
 	struct uacce *uacce = q->uacce;
 	int ret;
 
+	vma->vm_flags |= VM_DONTCOPY | VM_DONTEXPAND;
+
 	if (uacce->io_nr_pages !=0 && vma->vm_pgoff >= uacce->io_nr_pages) {
 		dev_info(uacce->dev, "map share memory (off=%lx)\n",
 			 vma->vm_pgoff);
 		ret = uacce_create_shm_pages(q, vma);
 	}else if (uacce->ops->mmap) {
-		vma->vm_flags |= VM_DONTCOPY | VM_DONTEXPAND;
 		dev_info(uacce->dev, "map accelerator io space (off=%lx)\n",
 			 vma->vm_pgoff);
 		ret = uacce->ops->mmap(q, vma);
