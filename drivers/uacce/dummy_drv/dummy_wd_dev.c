@@ -344,7 +344,7 @@ static int dummy_wd_probe(struct platform_device *pdev)
 	uacce->name = DUMMY_WD;
 	uacce->dev = &pdev->dev;
 	uacce->priv = hw;
-	uacce->flags = 0;
+	uacce->flags = UACCE_DEV_NOIOMMU;
 	uacce->io_nr_pages = 1;
 	uacce->ops = &dummy_ops;
 
