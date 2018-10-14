@@ -163,12 +163,12 @@ Legacy Mode Support
 ===================
 For the hardware without IOMMU, WarpDrive can still work, the only problem is
 VA cannot be used in the device. The driver should adopt another strategy for
-the shared memory. It is only for testing, it is not recommended.
+the shared memory. It is only for testing, and not recommended.
 
 
 The Folk Scenario
 =================
-If a process with allocated queues and shared memory, what happen if it forks
+For a process with allocated queues and shared memory, what happen if it forks
 a child?
 
 The fd of the queue will be duplicated on folk, so the child can send request
@@ -178,10 +178,10 @@ except for the one who open the queue will be blocked.
 It is recommended to add O_CLOEXEC to the queue file.
 
 The queue mmap space has a VM_DONTCOPY in its VMA. So the child will lost all
-those VMA.
+those VMAs.
 
 This is why *WarpDrive* does not adopt the mode used in *VFIO* and *InfiniBand*.
-Both solution can set any user pointer for hardware sharing. But they cannot
+Both solutions can set any user pointer for hardware sharing. But they cannot
 support fork when the dma is in process. Or the "Copy-On-Write" procedure will
 make the parent process lost its physical pages.
 
