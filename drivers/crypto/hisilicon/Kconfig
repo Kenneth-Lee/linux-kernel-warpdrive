@@ -5,6 +5,7 @@ config CRYPTO_DEV_HISILICON
 
 config CRYPTO_DEV_HISI_QM
 	tristate
+	select UACCE_STUB
 	depends on ARM64 && PCI
 
 config CRYPTO_DEV_HISI_ZIP

@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-2.0+ */
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 #ifndef __UACCE_H
 #define __UACCE_H
 
@@ -100,42 +100,23 @@ int uacce_register(struct uacce *uacce);
 void uacce_unregister(struct uacce *uacce);
 void uacce_wake_up(struct uacce_queue *q);
 
-/* Allocate a page and share it between kernel and device with the same virutal
- * address.
- * This will work even in passthrough mode because we assume the device should
- * recogonize the kernel address in this case.
+/* following are uacce stub API, for those drivers who can still work when uacce
+ * is disabled
  */
-static inline void *uacce_alloc_shared_mem(struct device *dev, size_t size,
-					   int prot)
-{
-	int order = get_order(size);
-	void *addr = (void *)__get_free_pages(order, GFP_KERNEL);
-	int ret;
 
-	if (!addr)
-		return ERR_PTR(-ENOMEM);
+/* va continue mem shared between device and the cpu (kenrel or user space) */
+struct uacce_share_mem {
+	struct device *dev;
+	void *va;
+	int order;
+};
 
-	memset(addr, 0, 1<<order);
-
-	ret = iommu_map(iommu_get_domain_for_dev(dev), (unsigned long)addr,
-			(phys_addr_t)addr, 1<<order, prot);
-	if (ret) {
-		free_pages((unsigned long)addr, order);
-		return ERR_PTR(ret);
-	}else
-		return addr;
-}
-
-static inline void uacce_free_shared_mem(struct device *dev, void *addr,
-					 size_t size)
-{
-	int order = get_order(size);
-	size_t unmap_size;
-
-	unmap_size = iommu_unmap(iommu_get_domain_for_dev(dev),
-				 (unsigned long)addr, 1<<order);
-	WARN(unmap_size != 1<<order, "unmap share memory fail\n");
-	free_pages((unsigned long)addr, order);
-}
+int uacce_set_iommu_domain(struct device *dev);
+void uacce_unset_iommu_domain(struct device *dev);
+struct uacce_share_mem *uacce_alloc_shared_mem(struct device *dev,
+					       size_t size, int prot);
+void uacce_free_shared_mem(struct uacce_share_mem *sm);
+int uacce_mmap_shared_mem(struct uacce_share_mem *sm,
+			  struct vm_area_struct *vma);
 
 #endif

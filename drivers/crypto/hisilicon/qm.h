@@ -130,12 +130,12 @@ struct qm_info {
 	resource_size_t phys_base;
 	resource_size_t size;
 	void __iomem *io_base;
-	void *smem_base; /* memory shared to device */
 
 	u32 sqe_size;
 	u32 qp_base;
 	u32 qp_num;
 
+	struct uacce_share_mem *sm;
 	struct sqc *sqc;
 	struct cqc *cqc;
 	struct eqc *eqc;
@@ -180,6 +180,7 @@ struct hisi_qp {
 	u8 alg_type;
 	u8 req_type;
 
+	struct uacce_share_mem *sm;
 	struct sqc *sqc;
 	struct cqc *cqc;
 	void *sqe;

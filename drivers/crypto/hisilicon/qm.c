@@ -426,13 +426,15 @@ int hisi_qm_start_qp(struct hisi_qp *qp, unsigned long arg)
 	cqc = qp->cqc = qm->cqc + qp_index * sizeof(struct cqc);
 
 	/* allocate sq and cq */
-	qp->sqe = uacce_alloc_shared_mem(dev,
+	qp->sm = uacce_alloc_shared_mem(dev,
 			qm->sqe_size * QM_Q_DEPTH +
 				sizeof(struct cqe) * QM_Q_DEPTH,
 			IOMMU_READ | IOMMU_WRITE);
-	if (PTR_ERR_OR_ZERO(qp->sqe))
-		return PTR_ERR(qp->sqe);
-	qp->cqe = qp->sqe + qm->sqe_size * QM_Q_DEPTH;
+	if (PTR_ERR_OR_ZERO(qp->sm))
+		return PTR_ERR(qp->sm);
+
+	qp->sqe = qp->sm->va;
+	qp->cqe = qp->sm->va + qm->sqe_size * QM_Q_DEPTH;
 
 	INIT_QC(sqc, qp->sqe);
 	sqc->pasid = pasid;
@@ -468,8 +470,7 @@ int hisi_qm_start_qp(struct hisi_qp *qp, unsigned long arg)
 	return qp_index;
 
 err_with_shared_mem:
-	uacce_free_shared_mem(dev, qp->sqe,
-		qm->sqe_size * QM_Q_DEPTH + sizeof(struct cqe) * QM_Q_DEPTH);
+	uacce_free_shared_mem(qp->sm);
 	return ret;
 }
 EXPORT_SYMBOL_GPL(hisi_qm_start_qp);
@@ -477,15 +478,13 @@ EXPORT_SYMBOL_GPL(hisi_qm_start_qp);
 void hisi_qm_release_qp(struct hisi_qp *qp)
 {
 	struct qm_info *qm = qp->qm;
-	struct device *dev = &qm->pdev->dev;
 	int qid = qp->queue_id;
 
 	write_lock(&qm->qps_lock);
 	qm->qp_array[qp->queue_id] = NULL;
 	write_unlock(&qm->qps_lock);
 
-	uacce_free_shared_mem(dev, qp->sqe,
-		qm->sqe_size * QM_Q_DEPTH + sizeof(struct cqe) * QM_Q_DEPTH);
+	uacce_free_shared_mem(qp->sm);
 	kfree(qp);
 	bitmap_clear(qm->qp_bitmap, qid, 1);
 }
@@ -608,16 +607,7 @@ static int hisi_qm_mmap(struct uacce_queue *q,
 				       qm->phys_base >> PAGE_SHIFT,
 				       sz, pgprot_noncached(vma->vm_page_prot));
 	case 1:
-		if (sz > qm->sqe_size * QM_Q_DEPTH + 
-		    sizeof(struct cqe) * QM_Q_DEPTH)
-			return -EINVAL;
-
-		if (sz > PAGE_SIZE)
-			return -EINVAL; //todo: we support one page for now, will upgrade later
-
-		return remap_pfn_range(vma, vma->vm_start,
-				       (unsigned long)qp->sqe, sz,
-				       vma->vm_page_prot);
+		return uacce_mmap_shared_mem(qp->sm, vma);
 
 	default:
 		return -EINVAL;
@@ -703,13 +693,17 @@ int hisi_qm_init(const char *dev_name, struct qm_info *qm)
 	mutex_init(&qm->mailbox_lock);
 	rwlock_init(&qm->qps_lock);
 
-	//kenny.todo: add iommu_domain setting
-
 	if (qm->ver)
 		qm->ops = &qm_hw_ops_v1;
 
+	ret = uacce_set_iommu_domain(&pdev->dev);
+	if (ret)
+		goto err_with_irq;
+
 	return 0;
 
+err_with_irq:
+	pci_free_irq_vectors(pdev);
 err_with_mem_regions:
 	pci_release_mem_regions(pdev);
 err_with_pcidev:
@@ -723,6 +717,7 @@ void hisi_qm_uninit(struct qm_info *qm)
 {
 	struct pci_dev *pdev = qm->pdev;
 
+	uacce_unset_iommu_domain(&pdev->dev);
 	pci_free_irq_vectors(pdev);
 	pci_release_mem_regions(pdev);
 	pci_disable_device(pdev);
@@ -757,13 +752,12 @@ int hisi_qm_start(struct qm_info *qm)
 	if (qm->pdev->is_physfn)
 		qm->ops->vft_config(qm, qm->qp_base, qm->qp_num);
 
-	qm->smem_base = uacce_alloc_shared_mem(dev, smem_sz,
-					       IOMMU_READ | IOMMU_WRITE);
-	if (PTR_ERR_OR_ZERO(qm->smem_base))
+	qm->sm = uacce_alloc_shared_mem(dev, smem_sz, IOMMU_READ | IOMMU_WRITE);
+	if (PTR_ERR_OR_ZERO(qm->sm))
 		return -ENOMEM;
 
 	/* todo: make sure the alignment is right */
-	qm->eqc = qm->smem_base;
+	qm->eqc = qm->sm->va;
 	qm->eqe = (void *)qm->eqc +
 		max_t(size_t, sizeof(struct eqc), sizeof(struct aeqc));
 	qm->sqc = (void *)qm->eqe + sizeof(struct eqe) * QM_Q_DEPTH;
@@ -816,7 +810,7 @@ err_with_qp_array:
 err_with_bitmap:
 	kfree(qm->qp_bitmap);
 err_with_smem:
-	uacce_free_shared_mem(dev, qm->smem_base, smem_sz);
+	uacce_free_shared_mem(qm->sm);
 	return ret;
 }
 EXPORT_SYMBOL_GPL(hisi_qm_start);
@@ -824,12 +818,6 @@ EXPORT_SYMBOL_GPL(hisi_qm_start);
 void hisi_qm_stop(struct qm_info *qm)
 {
 	struct pci_dev *pdev = qm->pdev;
-	struct device *dev = &pdev->dev;
-	size_t smem_sz =
-		max_t(size_t, sizeof(struct eqc), sizeof(struct aeqc)) +
-		sizeof(struct eqe) * QM_Q_DEPTH +
-		sizeof(struct sqc) * qm->qp_num +
-		sizeof(struct cqc) * qm->qp_num;
 
 #ifdef CONFIG_UACCE
 	uacce_unregister(&qm->uacce);
@@ -838,7 +826,7 @@ void hisi_qm_stop(struct qm_info *qm)
 	free_irq(pci_irq_vector(pdev, 0), qm);
 	kfree(qm->qp_array);
 	kfree(qm->qp_bitmap);
-	uacce_free_shared_mem(dev, qm->smem_base, smem_sz);
+	uacce_free_shared_mem(qm->sm);
 }
 EXPORT_SYMBOL_GPL(hisi_qm_stop);
 

@@ -2,12 +2,16 @@ menuconfig UACCE
 	tristate "Accelerator Framework for user land"
 	depends on IOMMU_API
 	select ANON_INODES
+	select UACCE_STUB
 	help
 	  UACCE provodes a framework for user process get service from the
 	  hardware accelerator without syscall on the data path.
 	  See Documentation/warpdrive/warpdrive.rst for more details.
 
 	  If you don't know what to do here, say N.
+
+config UACCE_STUB
+	tristate
 
 config WD_DUMMY_DEV
 	tristate "Support for WrapDrive Dummy Device"

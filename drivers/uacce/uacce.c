@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-2.0+ */
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 #include <linux/compat.h>
 #include <linux/file.h>
 #include <linux/idr.h>
@@ -489,7 +489,7 @@ int uacce_register(struct uacce *uacce)
 	if (!uacce->dev)
 		return -ENODEV;
 
-	mutex_lock(&uacce_mutex);
+	mutex_lock_killable(&uacce_mutex);
 
 	ret = uacce_create_chrdev(uacce);
 	if (ret)
