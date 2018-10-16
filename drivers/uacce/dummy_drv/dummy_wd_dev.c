@@ -161,7 +161,7 @@ static void dummy_init_hw_queue(struct dummy_hw_queue *hwq, int used, int devid,
 	hwq->used = used;
 	if (used) {
 		hwq->reg = (struct dummy_hw_queue_reg *)
-			__get_free_page(GFP_KERNEL);
+			__get_free_pages(GFP_KERNEL, DUMMY_REGMEM_ORDER);
 		memcpy(hwq->reg->hw_tag, DUMMY_HW_TAG, DUMMY_HW_TAG_SZ);
 		hwq->reg->ring_bd_num = Q_BDS;
 		writel(0, &hwq->reg->head);
@@ -175,7 +175,7 @@ static void dummy_init_hw_queue(struct dummy_hw_queue *hwq, int used, int devid,
 
 		mutex_init(&hwq->mutex);
 	} else {
-		free_page((unsigned long)hwq->reg);
+		free_pages((unsigned long)hwq->reg, DUMMY_REGMEM_ORDER);
 	}
 }
 
@@ -222,12 +222,13 @@ static int dummy_mmap(struct uacce_queue *q, struct vm_area_struct *vma)
 	struct dummy_hw_queue *hwq = (struct dummy_hw_queue *)q->priv;
 
 	if (vma->vm_pgoff != 0 ||
-	    vma->vm_end - vma->vm_start > PAGE_SIZE ||
+	    vma->vm_end - vma->vm_start > DUMMY_REGMEM_NR_PAGE<<PAGE_SHIFT ||
 	    !(vma->vm_flags & VM_SHARED))
 		return -EINVAL;
 
-	return remap_pfn_range(vma, vma->vm_start, __pa(hwq->reg)>>PAGE_SHIFT,
-		PAGE_SIZE, vma->vm_page_prot);
+	vma->vm_flags |= VM_IO;
+	return remap_pfn_range(vma, vma->vm_start, virt_to_pfn(hwq->reg),
+		vma->vm_end - vma->vm_start, vma->vm_page_prot);
 }
 
 static int dummy_map(struct uacce_queue *q) {
@@ -345,7 +346,7 @@ static int dummy_wd_probe(struct platform_device *pdev)
 	uacce->dev = &pdev->dev;
 	uacce->priv = hw;
 	uacce->flags = UACCE_DEV_NOIOMMU;
-	uacce->io_nr_pages = 1;
+	uacce->io_nr_pages = 1 << DUMMY_REGMEM_ORDER;
 	uacce->ops = &dummy_ops;
 
 	return uacce_register(uacce);

@@ -10,6 +10,7 @@
 
 #include "dummy_drv.h"
 
+#define PAGE_SIZE 4096
 
 struct dummy_q_priv {
 	/* local mirror of the register space */
@@ -38,7 +39,11 @@ int dummy_set_queue_dio(struct wd_queue *q)
 	q->priv = priv;
 	priv->head = 0;
 	priv->resp_tail = 0;
-	priv->reg = mmap(0, sizeof(struct dummy_hw_queue_reg),
+	/* priv->reg = mmap(0, sizeof(struct dummy_hw_queue_reg)
+		PROT_READ | PROT_WRITE, MAP_SHARED, q->fd, 0);
+		*/
+	/* try to test a bigger mmap region which contains more than a page */
+	priv->reg = mmap(0, DUMMY_REGMEM_NR_PAGE*PAGE_SIZE,
 		PROT_READ | PROT_WRITE, MAP_SHARED, q->fd, 0);
 	if (priv->reg == MAP_FAILED) {
 		DUMMY_ERR("dummy_dev: mmap fail (%d)\n", errno);
@@ -127,11 +132,9 @@ void dummy_flush(struct wd_queue *q)
 	ioctl(q->fd, DUMMY_CMD_FLUSH);
 }
 
-#define PAGE_SIZE 4096
-
 void *dummy_preserve_mem(struct wd_queue *q, size_t size) {
 	void *mem = mmap(0, size, PROT_READ | PROT_WRITE,
-		    MAP_SHARED, q->fd, PAGE_SIZE);
+		    MAP_SHARED, q->fd, size);
 	if (mem == MAP_FAILED)
 		return NULL;
 	else

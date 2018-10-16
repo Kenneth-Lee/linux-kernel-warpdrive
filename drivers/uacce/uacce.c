@@ -402,12 +402,14 @@ static int uacce_fops_mmap(struct file *filep, struct vm_area_struct *vma)
 	vma->vm_flags |= VM_DONTCOPY | VM_DONTEXPAND;
 
 	if (uacce->io_nr_pages !=0 && vma->vm_pgoff >= uacce->io_nr_pages) {
-		dev_info(uacce->dev, "map share memory (off=%lx)\n",
-			 vma->vm_pgoff);
+		dev_info(uacce->dev,
+			 "map share memory (off=%lx, start=%lx, end=%lx)\n",
+			 vma->vm_pgoff, vma->vm_start, vma->vm_end);
 		ret = uacce_create_shm_pages(q, vma);
 	}else if (uacce->ops->mmap) {
-		dev_info(uacce->dev, "map accelerator io space (off=%lx)\n",
-			 vma->vm_pgoff);
+		dev_info(uacce->dev,
+			 "map acce io space (off=%lx, start=%lx, end=%lx)\n",
+			 vma->vm_pgoff, vma->vm_start, vma->vm_end);
 		ret = uacce->ops->mmap(q, vma);
 	}else {
 		dev_err(uacce->dev, "no driver mmap!\n");
@@ -489,7 +491,7 @@ int uacce_register(struct uacce *uacce)
 	if (!uacce->dev)
 		return -ENODEV;
 
-	mutex_lock_killable(&uacce_mutex);
+	mutex_lock(&uacce_mutex);
 
 	ret = uacce_create_chrdev(uacce);
 	if (ret)

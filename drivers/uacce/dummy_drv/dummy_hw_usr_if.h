@@ -46,4 +46,7 @@ struct dummy_hw_queue_reg {
 
 #define DUMMY_CMD_FLUSH		_IO('d', 0)
 
+#define DUMMY_REGMEM_ORDER 1
+#define DUMMY_REGMEM_NR_PAGE (1 << DUMMY_REGMEM_ORDER)
+
 #endif
