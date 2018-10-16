@@ -27,7 +27,7 @@
 #define MAX_DEV 3
 #define MAX_QUEUE 4
 #define QUEUE_YEILD_MS 50
-#undef VERBOSE_LOG
+#define VERBOSE_LOG
 
 #ifdef VERBOSE_LOG
 #define dummy_log(msg, ...) pr_info("dummy log: " msg, ##__VA_ARGS__)
@@ -61,6 +61,21 @@ static struct dummy_hw {
 	struct platform_device *pdev;
 } hws[MAX_DEV];
 
+/* debug function */
+static void dump_page_state_range(void *va, int nr_pages, const char *id) {
+	int i;
+	struct page *page;
+
+	dummy_log("dump %d pages when %s:\n", nr_pages, id);
+	for (i = 0; i<nr_pages; i++) {
+		page = virt_to_page(va);
+		dummy_log("page[%d].ref_count = %d, .map_count = %d\n",
+			  i,
+			  page_ref_count(page),
+			  atomic_read(&page->_mapcount));
+	}
+}
+
 static int _do_copy(struct uacce_queue *q, void *tgt, void *src, size_t len)
 {
 	struct dummy_hw_queue *hwq = (struct dummy_hw_queue *)q->priv;
@@ -83,6 +98,8 @@ static int _do_copy(struct uacce_queue *q, void *tgt, void *src, size_t len)
 	ksrc += (unsigned long)hwq->vmap;
 	dummy_log("memcpy(%lx, %lx, %lx), va=%lx, kva=%lx\n", ktgt, ksrc, len,
 		q->svas->va, (unsigned long)hwq->vmap);
+	dump_page_state_range(hwq->reg, 1<<DUMMY_REGMEM_ORDER,
+			      "when copy");
 	memcpy((void *)ktgt, (void *)ksrc, len);
 
 out:
@@ -162,6 +179,9 @@ static void dummy_init_hw_queue(struct dummy_hw_queue *hwq, int used, int devid,
 	if (used) {
 		hwq->reg = (struct dummy_hw_queue_reg *)
 			__get_free_pages(GFP_KERNEL, DUMMY_REGMEM_ORDER);
+		BUG_ON(!hwq->reg);
+		dump_page_state_range(hwq->reg, 1<<DUMMY_REGMEM_ORDER,
+				      "alloc");
 		memcpy(hwq->reg->hw_tag, DUMMY_HW_TAG, DUMMY_HW_TAG_SZ);
 		hwq->reg->ring_bd_num = Q_BDS;
 		writel(0, &hwq->reg->head);
@@ -175,6 +195,8 @@ static void dummy_init_hw_queue(struct dummy_hw_queue *hwq, int used, int devid,
 
 		mutex_init(&hwq->mutex);
 	} else {
+		dump_page_state_range(hwq->reg, 1<<DUMMY_REGMEM_ORDER,
+				      "before free");
 		free_pages((unsigned long)hwq->reg, DUMMY_REGMEM_ORDER);
 	}
 }
@@ -226,7 +248,7 @@ static int dummy_mmap(struct uacce_queue *q, struct vm_area_struct *vma)
 	    !(vma->vm_flags & VM_SHARED))
 		return -EINVAL;
 
-	vma->vm_flags |= VM_IO;
+	vma->vm_flags |= VM_PFNMAP;
 	return remap_pfn_range(vma, vma->vm_start, virt_to_pfn(hwq->reg),
 		vma->vm_end - vma->vm_start, vma->vm_page_prot);
 }

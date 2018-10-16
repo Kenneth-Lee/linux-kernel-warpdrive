@@ -84,7 +84,7 @@ static void _do_test(struct wd_queue *q)
 		printf("test success\n");
 }
 
-#define REP_TEST 100
+#define REP_TEST 10
 int main(int argc, char *argv[])
 {
 	struct wd_queue q;
