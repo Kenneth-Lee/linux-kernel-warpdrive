@@ -27,7 +27,7 @@ The format of the queue can differ from hardware to hardware. But the
 application need not to make any system call for the communication.
 
 *WarpDrive* tries to create a shared virtual address space for all involved
-accelerators. Within this space, the requests sent to queue can refer to any 
+accelerators. Within this space, the requests sent to queue can refer to any
 virtual address, which will be valid to the application and all involved
 accelerators.
 
@@ -65,7 +65,7 @@ does not support "Share Virtual Memory". This will be explained after the
 *IOMMU* idea.
 
 The communication between user land application can all be done by writing or
-reading on the mmap memory.
+reading on the mmapped memory.
 
 In kernel, *uacce* makes the memory sharing work by the IOMMU API. The driver
 that registers to *uacce* should use iommu API instead of dma API for DMA
@@ -136,6 +136,44 @@ numa_node (ro)
 
 priority (rw)
         Priority or the device, bigger is higher
+
+
+The kernel API
+--------------
+
+The *uacce* kernel API is defined in uacce.h. If the hardware support SVM/SVA,
+The driver need only the following API functions: ::
+
+        int uacce_register(uacce);
+        void uacce_unregister(uacce);
+        void uacce_wake_up(q);
+
+*uacce_wake_up* is used to notify the process who epoll() on the queue file.
+
+If the hardware support iommu but not SVM/SVA, and the driver need to
+communicate with the hardware, the following API can come to help: ::
+
+        int uacce_set_iommu_domain(dev);
+        void uacce_unset_iommu_domain(dev);
+        ptr *uacce_alloc_shared_mem(dev, size, prot);
+        void uacce_free_shared_mem(ssvm);
+        int uacce_mmap_shared_mem(ssvm);
+
+All these functions is available even CONFIG_UACCE is disable. (Just put a
+SELECT_UACCE_STUB for your kernel module)
+
+*uacce_set_iommu_domain* set the device to IOMMU_DOMAIN_UNMANGED mode. You
+would not use any other kernel DMA API after this. If the IOMMU is set to
+passthought mode, this function may fail. In the case, the driver can fallback
+to general DMA mode.
+
+*uacce_alloc_shared_mem* is the replacer for kernel DMA API, if the share
+memory is created, it is share between the kernel and the device. The *ptr*
+allocated is valid to both hardware and kernel.
+
+*uacce_mmap_shared_mem* is used to map the share memory to user space. In the
+case, the va in user is not the same as the va in the IOMMU (But this should
+be intended by the application who call mmap.)
 
 
 Multiple processes support
