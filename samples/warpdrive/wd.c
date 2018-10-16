@@ -89,3 +89,8 @@ void *wd_preserve_share_memory(struct wd_queue *q, size_t size)
 {
 	return drv_preserve_mem(q, size);
 }
+
+int wd_share_preserved_memory(struct wd_queue *q, struct wd_queue *target_q)
+{
+	return ioctl(q->fd, UACCE_CMD_SHARE_SVAS, target_q->fd);
+}
