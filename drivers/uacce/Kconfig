@@ -1,0 +1,15 @@
+menuconfig UACCE
+	tristate "Accelerator Framework for User Land"
+	depends on IOMMU_API
+	select ANON_INODES
+	select UACCE_STUB
+	help
+	  UACCE provides interface for the user process to access the hardware
+	  without interaction with the kernel space in data path.
+
+	  See Documentation/warpdrive/warpdrive.rst for more details.
+
+	  If you don't know what to do here, say N.
+
+config UACCE_STUB
+	tristate
