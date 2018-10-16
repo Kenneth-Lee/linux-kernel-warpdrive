@@ -527,6 +527,127 @@ int hisi_qp_send(struct hisi_qp *qp, void *msg)
 }
 EXPORT_SYMBOL_GPL(hisi_qp_send);
 
+#ifdef CONFIG_UACCE
+static void qm_qp_event_notifier(struct hisi_qp *qp)
+{
+	uacce_wake_up(qp->uacce_q);
+}
+
+static int hisi_qm_get_queue(struct uacce *uacce, unsigned long arg,
+			     struct uacce_queue **q)
+{
+	struct qm_info *qm = uacce->priv;
+	struct hisi_qp *qp = NULL;
+	struct uacce_queue *wd_q;
+	u8 alg_type = 0; /* fix me here */
+	//int pasid = arg; fixme: set it into device
+	int ret;
+
+	qp = hisi_qm_create_qp(qm, alg_type);
+	if (IS_ERR(qp))
+		return PTR_ERR(qp);
+
+	wd_q = kzalloc(sizeof(struct uacce_queue), GFP_KERNEL);
+	if (!wd_q) {
+		ret = -ENOMEM;
+		goto err_with_qp;
+	}
+
+	wd_q->priv = qp;
+	wd_q->uacce = uacce;
+	*q = wd_q;
+	qp->uacce_q = wd_q;
+	qp->event_cb = qm_qp_event_notifier;
+
+	ret = hisi_qm_start_qp(qp, arg);
+	if (ret < 0)
+		goto err_with_wd_q;
+
+	return ret;
+
+err_with_wd_q:
+	kfree(wd_q);
+err_with_qp:
+	hisi_qm_release_qp(qp);
+	return ret;
+}
+
+static void hisi_qm_put_queue(struct uacce_queue *q)
+{
+	struct hisi_qp *qp = q->priv;
+
+	/* need to stop hardware, but can not support in v1 */
+	hisi_qm_release_qp(qp);
+	kfree(q);
+}
+
+/* map sq/cq/doorbell to user space */
+static int hisi_qm_mmap(struct uacce_queue *q,
+			struct vm_area_struct *vma)
+{
+	struct hisi_qp *qp = (struct hisi_qp *)q->priv;
+	struct qm_info *qm = qp->qm;
+	size_t sz = vma->vm_end - vma->vm_start;
+	u8 region;
+
+	region = vma->vm_pgoff;
+
+	switch (region) {
+	case 0:
+		if (sz > PAGE_SIZE)
+			return -EINVAL;
+
+		vma->vm_flags |= VM_IO;
+		/*
+		 * Warning: This is not safe as multiple queues use the same
+		 * doorbell, v1 hardware interface problem. v2 will fix it
+		 */
+		return remap_pfn_range(vma, vma->vm_start,
+				       qm->phys_base >> PAGE_SHIFT,
+				       sz, pgprot_noncached(vma->vm_page_prot));
+	case 1:
+		return uacce_mmap_shared_mem(qp->sm, vma);
+
+	default:
+		return -EINVAL;
+	}
+}
+
+static const struct uacce_ops uacce_qm_ops = {
+	.get_queue = hisi_qm_get_queue,
+	.put_queue = hisi_qm_put_queue,
+	.mmap = hisi_qm_mmap,
+};
+
+static int qm_register_uacce(struct qm_info *qm)
+{
+	struct pci_dev *pdev = qm->pdev;
+	struct uacce *uacce = &qm->uacce;
+
+	/* fime me */
+	uacce->iommu_type = 0;
+#ifdef CONFIG_IOMMU_SVA
+	/* fixe me */
+	uacce->dma_flag = 0;
+#else
+	/* fixe me */
+	uacce->dma_flag = 0;
+#endif
+	uacce->owner = THIS_MODULE;
+	uacce->name = qm->dev_name;
+	uacce->dev = &pdev->dev;
+	uacce->is_vf = pdev->is_virtfn;
+	uacce->priv = qm;
+	uacce->api_ver = "hisi_qm_v1";
+	uacce->flags = 0;
+	uacce->io_nr_pages = (4096 + (qm->sqe_size + sizeof(struct cqe)) *
+					QM_Q_DEPTH) >> PAGE_SHIFT;
+	uacce->ops = &uacce_qm_ops;
+
+	return uacce_register(uacce);
+}
+#endif
+
 int hisi_qm_init(const char *dev_name, struct qm_info *qm)
 {
 	int ret;
@@ -671,6 +792,14 @@ int hisi_qm_start(struct qm_info *qm)
 	if (ret)
 		goto err_with_qp_array;
 
+#ifdef CONFIG_UACCE
+	ret = qm_register_uacce(qm);
+	if (ret) {
+		free_irq(pci_irq_vector(pdev, 0), qm);
+		goto err_with_qp_array;
+	}
+#endif
+
 	writel(0x0, QM_ADDR(qm, QM_VF_EQ_INT_MASK));
 
 	return 0;
@@ -688,6 +817,10 @@ EXPORT_SYMBOL_GPL(hisi_qm_start);
 void hisi_qm_stop(struct qm_info *qm)
 {
 	struct pci_dev *pdev = qm->pdev;
+
+#ifdef CONFIG_UACCE
+	uacce_unregister(&qm->uacce);
+#endif
 
 	free_irq(pci_irq_vector(pdev, 0), qm);
 	kfree(qm->qp_array);
