@@ -18,8 +18,6 @@
 #define INPUT_BUFFER_SIZE	(64 * 1024)
 #define OUTPUT_BUFFER_SIZE	(64 * 1024)
 
-struct list_head hisi_zip_list;
-
 #define COMP_NAME_TO_TYPE(alg_name)			\
 	(!strcmp((alg_name), "zlib-deflate") ? 0x02 :	\
 	 !strcmp((alg_name), "gzip") ? 0x03 : 0)	\

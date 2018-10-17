@@ -230,11 +230,18 @@ static int uacce_fops_open(struct inode *inode, struct file *filep)
 	if (!uacce->ops->get_queue)
 		return -EINVAL;
 
-#ifdef CONFIG_IOMMU_SVA
-	/* todo: allocate queue pasid and set for this process */
-#endif
-
 	ret = uacce_sva_check(uacce);
+
+	if (uacce->flags & UACCE_DEV_SVA) {
+#ifdef CONFIG_IOMMU_SVA
+		ret = __iommu_sva_bind_device(uacce->dev, current->mm, &pasid,
+					      IOMMU_SVA_FEAT_IOPF, NULL);
+		q->pasid = pasid;
+#else
+		ret = -EINVAL;
+#endif
+	}
+
 	if (ret)
 		return ret;
 
@@ -305,6 +312,12 @@ static int uacce_fops_release(struct inode *inode, struct file *filep)
 		q->svas = NULL;
 	}
 	write_unlock(&uacce_lock);
+
+#ifdef CONFIG_IOMMU_SVA
+	if (uacce->flags & UACCE_DEV_SVA)
+		iommu_sva_unbind_device(uacce->dev, q->pasid);
+
+#endif
 
 	if (uacce->ops->put_queue)
 		uacce->ops->put_queue(q);
@@ -502,6 +515,15 @@ int uacce_register(struct uacce *uacce)
 	if (ret)
 		goto err_with_chrdev;
 
+#ifdef CONFIG_IOMMU_SVA
+	ret = iommu_sva_init_device(uacce->dev, IOMMU_SVA_FEAT_IOPF, 0, 0,
+				    NULL);
+	if (ret) {
+		device_unregister(&uacce->cls_dev);
+		goto err_with_chrdev;
+	}
+#endif
+
 	mutex_unlock(&uacce_mutex);
 	return 0;
 
@@ -524,8 +546,11 @@ void uacce_unregister(struct uacce *uacce)
 {
 	mutex_lock(&uacce_mutex);
 
-	idr_remove(&uacce_idr, uacce->dev_id);
+#ifdef CONFIG_IOMMU_SVA
+	iommu_sva_shutdown_device(uacce->dev);
+#endif
 	device_unregister(&uacce->cls_dev);
+	uacce_destroy_chrdev(uacce);
 
 	mutex_unlock(&uacce_mutex);
 }

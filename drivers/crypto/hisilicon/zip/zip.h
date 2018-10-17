@@ -52,4 +52,6 @@ struct hisi_zip_sqe {
 	__u32 rsvd1[4];
 };
 
+extern struct list_head hisi_zip_list;
+
 #endif

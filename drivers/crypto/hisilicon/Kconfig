@@ -20,7 +20,7 @@ config CRYPTO_DEV_HISI_QM
 
 config CRYPTO_DEV_HISI_ZIP
 	tristate "Support for HISI ZIP Driver"
-	depends on ARM64 && CRYPTO_DEV_HISILICON
+	depends on ARM64
 	select CRYPTO_DEV_HISI_QM
 	help
 	  Support for HiSilicon HIP08 ZIP Driver
