@@ -11,16 +11,6 @@
 struct uacce_queue;
 struct uacce;
 
-/**
- * UACCE Device Attributes:
- *
- * SVA: the device supports Share Virtual Memory. Its IOMMU has page table for
- *      every process and can do page fault from device
- * NOIOMMU: the device have no IOMMU support
- */
-#define UACCE_DEV_SVA			(1<<0)
-#define UACCE_DEV_NOIOMMU		(1<<1)
-
 /* Static Share Virtual Memory Space */
 struct uacce_svas {
 	/* todo: support multiple section in the future */

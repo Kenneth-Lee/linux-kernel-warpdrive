@@ -13,8 +13,8 @@
 static struct class *uacce_class;
 static DEFINE_IDR(uacce_idr);
 static dev_t uacce_devt;
-static DEFINE_MUTEX(uacce_mutex);
-static DEFINE_RWLOCK(uacce_lock);
+static DEFINE_MUTEX(uacce_mutex); /* mutex to protect uacce */
+static DEFINE_RWLOCK(uacce_lock); /* lock to protect all queues management */
 
 static const struct file_operations uacce_fops;
 
@@ -60,65 +60,6 @@ static void uacce_free_svas(struct uacce_svas *svas)
 	}
 	kfree(svas);
 }
-
-static long uacce_cmd_share_svas(struct uacce_queue *tgt, int fd)
-{
-	struct file *filep = fget(fd);
-	struct uacce_queue *src;
-	int ret;
-
-	if (!filep || filep->f_op != &uacce_fops)
-		return -EINVAL;
-
-	src = (struct uacce_queue *)filep->private_data;
-	if (!src)
-		return -EINVAL;
-
-	write_lock(&uacce_lock);
-	if (!src->svas || tgt->svas) {
-		dev_warn(tgt->uacce->dev,
-		       "tgt should have svas and src should not\n");
-		ret = -EINVAL;
-		goto err;
-	}
-
-	tgt->svas = src->svas;
-	list_add(&tgt->list, &src->svas->qs);
-
-	write_unlock(&uacce_lock);
-	return 0;
-
-err:
-	write_unlock(&uacce_lock);
-	return ret;
-}
-
-static long uacce_fops_unl_ioctl(struct file *filep,
-				unsigned int cmd, unsigned long arg)
-{
-	struct uacce_queue *q = (struct uacce_queue *)filep->private_data;
-	struct uacce *uacce = q->uacce;
-
-	switch (cmd) {
-	case UACCE_CMD_SHARE_SVAS:
-		return uacce_cmd_share_svas(q, arg);
-	default:
-		if (uacce->ops->ioctl)
-			return uacce->ops->ioctl(q, cmd, arg);
-
-		dev_err(uacce->dev, "ioctl cmd (%d) is not supported!\n", cmd);
-		return -EINVAL;
-	}
-}
-
-#ifdef CONFIG_COMPAT
-static long uacce_fops_compat_ioctl(struct file *filep,
-				   unsigned int cmd, unsigned long arg)
-{
-	arg = (unsigned long)compat_ptr(arg);
-	return uacce_fops_unl_ioctl(filep, cmd, arg);
-}
-#endif
 
 static inline int uacce_iommu_map_shm_pages(struct uacce_queue *q)
 {
@@ -168,27 +109,6 @@ static inline void uacce_iommu_unmap_shm_pages(struct uacce_queue *q)
 	}
 }
 
-static int uacce_map_shm_on_queue(struct uacce_queue *q)
-{
-	struct uacce_svas *svas = q->svas;
-	int ret;
-
-	if (!svas->va)
-		return 0;
-
-	if (q->uacce->flags & UACCE_DEV_SVA)
-		ret = -EINVAL;
-	else if (q->uacce->flags & UACCE_DEV_NOIOMMU)
-		ret = q->uacce->ops->map ? q->uacce->ops->map(q) : -ENODEV;
-	else
-		ret = uacce_iommu_map_shm_pages(q);
-
-	if (!ret)
-		q->mapped_shm = true;
-
-	return ret;
-}
-
 static void uacce_unmap_shm_on_queue(struct uacce_queue *q)
 {
 	if (q->mapped_shm)
@@ -201,17 +121,112 @@ static void uacce_unmap_shm_on_queue(struct uacce_queue *q)
 		uacce_iommu_unmap_shm_pages(q);
 }
 
-static int uacce_sva_check(struct uacce *uacce)
+static int uacce_map_shm_on_queue(struct uacce_queue *q)
 {
-	if (uacce->flags & (UACCE_DEV_SVA | UACCE_DEV_NOIOMMU))
+	struct uacce_svas *svas = q->svas;
+	int ret;
+
+	if (!svas->va)
+		return 0;
+
+	if (q->uacce->flags & UACCE_DEV_NOIOMMU)
+		ret = q->uacce->ops->map ? q->uacce->ops->map(q) : -ENODEV;
+	else
+		ret = uacce_iommu_map_shm_pages(q);
+
+	if (!ret)
+		q->mapped_shm = true;
+
+	return ret;
+}
+
+static long uacce_cmd_share_svas(struct uacce_queue *tgt, int fd)
+{
+	struct file *filep = fget(fd);
+	struct uacce_queue *src;
+	int ret;
+
+	if (!filep || filep->f_op != &uacce_fops)
+		return -EINVAL;
+
+	src = (struct uacce_queue *)filep->private_data;
+	if (!src)
+		return -EINVAL;
+
+	/* no ssva is needed if the dev can do fault-from-dev */
+	if (tgt->uacce->flags | UACCE_DEV_FAULT_FROM_DEV)
+		return -EINVAL;
+
+	write_lock(&uacce_lock);
+	if (!src->svas || tgt->svas) {
+		dev_warn(tgt->uacce->dev,
+		       "tgt should have svas and src should not\n");
+		ret = -EINVAL;
+		goto err;
+	}
+
+	tgt->svas = src->svas;
+	list_add(&tgt->list, &src->svas->qs);
+	uacce_map_shm_on_queue(tgt);
+
+	write_unlock(&uacce_lock);
+	return 0;
+
+err:
+	write_unlock(&uacce_lock);
+	return ret;
+}
+
+static long uacce_fops_unl_ioctl(struct file *filep,
+				unsigned int cmd, unsigned long arg)
+{
+	struct uacce_queue *q = (struct uacce_queue *)filep->private_data;
+	struct uacce *uacce = q->uacce;
+
+	switch (cmd) {
+	case UACCE_CMD_SHARE_SVAS:
+		return uacce_cmd_share_svas(q, arg);
+	default:
+		if (uacce->ops->ioctl)
+			return uacce->ops->ioctl(q, cmd, arg);
+
+		dev_err(uacce->dev, "ioctl cmd (%d) is not supported!\n", cmd);
+		return -EINVAL;
+	}
+}
+
+#ifdef CONFIG_COMPAT
+static long uacce_fops_compat_ioctl(struct file *filep,
+				   unsigned int cmd, unsigned long arg)
+{
+	arg = (unsigned long)compat_ptr(arg);
+	return uacce_fops_unl_ioctl(filep, cmd, arg);
+}
+#endif
+
+static int uacce_dev_check(struct uacce *uacce)
+{
+	/* if dev support fault-from-dev, it should support pasid */
+	if ((uacce->flags | UACCE_DEV_FAULT_FROM_DEV) ||
+	    !(uacce->flags | UACCE_DEV_PASID))
+		return -EINVAL;
+
+	if (uacce->flags & UACCE_DEV_NOIOMMU)
 		return 0;
 
 	/* The device can be opened once if it dose not support multiple page
 	 * table. The better way to check this is count it per iommu_domain,
 	 * this is just a temporary solution
 	 */
-	if (atomic_add_unless(&uacce->openned, 1, 1))
-		return -EBUSY;
+	if (!(uacce->flags & UACCE_DEV_PASID)) {
+		if (atomic_add_unless(&uacce->openned, 1, 1))
+			return -EBUSY;
+	} else {
+#ifndef CONFIG_IOMMU_SVA
+		if (atomic_add_unless(&uacce->openned, 1, 1))
+			return -EBUSY;
+#endif
+	}
 
 	return 0;
 }
@@ -230,13 +245,12 @@ static int uacce_fops_open(struct inode *inode, struct file *filep)
 	if (!uacce->ops->get_queue)
 		return -EINVAL;
 
-	ret = uacce_sva_check(uacce);
+	ret = uacce_dev_check(uacce);
 
-	if (uacce->flags & UACCE_DEV_SVA) {
+	if (uacce->flags & UACCE_DEV_PASID) {
 #ifdef CONFIG_IOMMU_SVA
 		ret = __iommu_sva_bind_device(uacce->dev, current->mm, &pasid,
 					      IOMMU_SVA_FEAT_IOPF, NULL);
-		q->pasid = pasid;
 #else
 		ret = -EINVAL;
 #endif
@@ -332,6 +346,10 @@ static int uacce_create_shm_pages(struct uacce_queue *q,
 				  struct vm_area_struct *vma)
 {
 	int i, j, ret = 0;
+
+	/* dev with SVA need no ssva */
+	if (q->uacce->flags | UACCE_DEV_FAULT_FROM_DEV)
+		return -EINVAL;
 
 	write_lock(&uacce_lock);
 	if (!q->svas)
