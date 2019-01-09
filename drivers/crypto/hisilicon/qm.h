@@ -8,6 +8,10 @@
 #include <linux/slab.h>
 #include "qm_usr_if.h"
 
+#ifdef CONFIG_CRYPTO_QM_UACCE
+#include <linux/uacce.h>
+#endif
+
 /* qm user domain */
 #define QM_ARUSER_M_CFG_1		0x100088
 #define QM_ARUSER_M_CFG_ENABLE		0x100090
@@ -148,6 +152,10 @@ struct qm_info {
 
 	int uacce_mode;
 	const char *algs;
+
+#ifdef CONFIG_CRYPTO_QM_UACCE
+	struct uacce uacce;
+#endif
 };
 #define QM_ADDR(qm, off) ((qm)->io_base + off)
 
@@ -187,6 +195,10 @@ struct hisi_qp {
 	struct hisi_acc_qp_status qp_status;
 
 	struct qm_info *qm;
+
+#ifdef CONFIG_CRYPTO_QM_UACCE
+	struct uacce_queue *uacce_q;
+#endif
 
 	/* for crypto sync API */
 	struct completion completion;
