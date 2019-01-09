@@ -551,6 +551,248 @@ int hisi_qp_send(struct hisi_qp *qp, void *msg)
 }
 EXPORT_SYMBOL_GPL(hisi_qp_send);
 
+#ifdef CONFIG_CRYPTO_QM_UACCE
+static void qm_qp_event_notifier(struct hisi_qp *qp)
+{
+	uacce_wake_up(qp->uacce_q);
+}
+
+static int hisi_qm_uacce_get_queue(struct uacce *uacce, unsigned long arg,
+			     struct uacce_queue **q)
+{
+	struct qm_info *qm = uacce->priv;
+	struct hisi_qp *qp = NULL;
+	struct uacce_queue *wd_q;
+	u8 alg_type = 0; /* fix me here */
+	int ret;
+
+	qp = hisi_qm_create_qp(qm, alg_type);
+	if (IS_ERR(qp))
+		return PTR_ERR(qp);
+
+	wd_q = kzalloc(sizeof(struct uacce_queue), GFP_KERNEL);
+	if (!wd_q) {
+		ret = -ENOMEM;
+		goto err_with_qp;
+	}
+
+	wd_q->priv = qp;
+	wd_q->uacce = uacce;
+	*q = wd_q;
+	qp->uacce_q = wd_q;
+	qp->event_cb = qm_qp_event_notifier;
+	qp->pasid = arg;
+
+	return 0;
+
+err_with_qp:
+	hisi_qm_release_qp(qp);
+	return ret;
+}
+
+static void hisi_qm_uacce_put_queue(struct uacce_queue *q)
+{
+	struct hisi_qp *qp = q->priv;
+
+	/* need to stop hardware, but can not support in v1 */
+	hisi_qm_release_qp(qp);
+	kfree(q);
+}
+
+/* map sq/cq/doorbell to user space */
+static int hisi_qm_uacce_mmap(struct uacce_queue *q,
+			struct vm_area_struct *vma,
+			struct uacce_qfile_region *qfr)
+{
+	struct hisi_qp *qp = (struct hisi_qp *)q->priv;
+	struct qm_info *qm = qp->qm;
+	size_t sz = vma->vm_end - vma->vm_start;
+	struct pci_dev *pdev = qm->pdev;
+	struct device *dev = &pdev->dev;
+
+	switch (qfr->type) {
+	case UACCE_QFRT_MMIO:
+		WARN_ON(sz > PAGE_SIZE);
+		vma->vm_flags |= VM_IO;
+		/*
+		 * Warning: This is not safe as multiple queues use the same
+		 * doorbell, v1 hardware interface problem. will fix it in v2
+		 */
+		return remap_pfn_range(vma, vma->vm_start,
+				       qm->phys_base >> PAGE_SHIFT,
+				       sz, pgprot_noncached(vma->vm_page_prot));
+	case UACCE_QFRT_DUS:
+		if (qm->uacce_mode == UACCE_MODE_NOIOMMU) {
+			if (sz != qp->qdma.size) {
+				dev_warn(dev, "wrong queue size %ld vs %ld\n",
+					 sz, qp->qdma.size);
+				return -EINVAL;
+			}
+			return remap_pfn_range(vma, vma->vm_start,
+				qp->qdma.dma >> PAGE_SHIFT, sz,
+				vma->vm_page_prot);
+		}
+		return -EINVAL;
+
+	default:
+		return -EINVAL;
+	}
+}
+
+static int hisi_qm_uacce_start_queue(struct uacce_queue *q)
+{
+	int ret;
+	struct qm_info *qm = q->uacce->priv;
+	struct hisi_qp *qp = (struct hisi_qp *)q->priv;
+
+	dev_dbg(&q->uacce->dev, "uacce queue start\n");
+
+	/* without SVA, qm has to start with qp in UACCE_MODE_UACCE mode */
+	if (qm->uacce_mode == UACCE_MODE_UACCE) {
+		qm->qdma.dma = q->qfrs[UACCE_QFRT_DKO]->iova;
+		qm->qdma.va = q->qfrs[UACCE_QFRT_DKO]->kaddr;
+		qm->qdma.size = q->qfrs[UACCE_QFRT_DKO]->nr_pages >> PAGE_SHIFT;
+		ret = __hisi_qm_start(qm);
+		if (ret)
+			return ret;
+
+		qp->qdma.dma = q->qfrs[UACCE_QFRT_DUS]->iova;
+		qp->qdma.va = q->qfrs[UACCE_QFRT_DUS]->kaddr;
+		qp->qdma.size = q->qfrs[UACCE_QFRT_DUS]->nr_pages >> PAGE_SHIFT;
+	}
+
+	ret = hisi_qm_start_qp(qp, qp->pasid);
+	if (ret && qm->uacce_mode == UACCE_MODE_UACCE)
+		hisi_qm_stop(qm);
+
+	return ret;
+}
+
+static void hisi_qm_uacce_stop_queue(struct uacce_queue *q)
+{
+	struct qm_info *qm = q->uacce->priv;
+
+	if (qm->uacce_mode == UACCE_MODE_UACCE)
+		hisi_qm_stop(qm);
+}
+
+static int hisi_qm_uacce_map(struct uacce_queue *q,
+			     struct uacce_qfile_region *qfr)
+{
+	struct hisi_qp *qp = (struct hisi_qp *)q->priv;
+	struct device *dev = &q->uacce->dev;
+
+	if (qfr->type == UACCE_QFRT_DUS) {
+		if (!qfr->cont_pages) {
+			dev_err(dev, "noiommu mode need continue pages only\n");
+			return -EINVAL;
+		}
+
+		qp->qdma.dma = page_to_phys(qfr->cont_pages);
+		qp->qdma.va = qfr->kaddr; /* it can be 0 */
+		qp->qdma.size = qfr->nr_pages >> PAGE_SHIFT;
+
+		dev_dbg(dev, "hisi_qm_uacce_map dus dma=0x%lx, %d pages\n",
+			(unsigned long)qp->qdma.dma, qfr->nr_pages);
+
+	}
+	return 0;
+}
+
+static int qm_set_sqctype(struct uacce_queue *q, u16 type)
+{
+	struct qm_info *qm = q->uacce->priv;
+	struct hisi_qp *qp = (struct hisi_qp *)q->priv;
+	struct device *dev = &q->uacce->dev;
+	struct sqc *sqc;
+	int ret;
+
+	write_lock(&qm->qps_lock);
+	if (!qp->sqc_dma) {
+		dev_info(dev, "Please start queue before set sqc type\n");
+		ret = -EBUSY;
+		goto out_with_lock;
+	}
+
+	sqc = qp->sqc;
+	qp->alg_type = type;
+	sqc->w13 = QM_MK_SQC_W13(0, 1, qp->alg_type);
+	ret = qm_mb(qm, MAILBOX_CMD_SQC, qp->sqc_dma, qp->queue_id, 0, 0);
+
+out_with_lock:
+	write_unlock(&qm->qps_lock);
+	return ret;
+}
+
+static long hisi_qm_uacce_ioctl(struct uacce_queue *q, unsigned int cmd,
+				unsigned long arg)
+{
+	if (cmd == UACCE_CMD_QM_SET_OPTYPE)
+		return qm_set_sqctype(q, (u16)arg);
+
+	return -EINVAL;
+}
+
+/*
+ * the device is set the UACCE_DEV_SVA, but it will be cut if SVA patch is not
+ * available
+ */
+static struct uacce_ops uacce_qm_ops = {
+	.owner = THIS_MODULE,
+	.flags = UACCE_DEV_SVA | UACCE_DEV_KMAP_DUS,
+
+	.get_queue = hisi_qm_uacce_get_queue,
+	.put_queue = hisi_qm_uacce_put_queue,
+	.start_queue = hisi_qm_uacce_start_queue,
+	.stop_queue = hisi_qm_uacce_stop_queue,
+	.mmap = hisi_qm_uacce_mmap,
+	.ioctl = hisi_qm_uacce_ioctl,
+};
+
+static int qm_register_uacce(struct qm_info *qm)
+{
+	struct pci_dev *pdev = qm->pdev;
+	struct uacce *uacce = &qm->uacce;
+
+
+	uacce->name = dev_name(&pdev->dev);
+	uacce->drv_name = pdev->driver->name;
+	uacce->pdev = &pdev->dev;
+	uacce->is_vf = pdev->is_virtfn;
+	uacce->priv = qm;
+	uacce->ops = &uacce_qm_ops;
+	uacce->algs = qm->algs;
+
+	if (qm->uacce_mode == UACCE_MODE_NOIOMMU) {
+#if USE_PHY_IN_NOIOMMU_MODE
+		uacce->ops->flags = UACCE_DEV_NOIOMMU | UACCE_DEV_CONT_PAGE;
+#else
+		uacce->ops->flags = UACCE_DEV_NOIOMMU | UACCE_DEV_DRVMAP_DUS;
+#endif
+		uacce->ops->api_ver = HISI_QM_API_VER_BASE
+				      UACCE_API_VER_NOIOMMU_SUBFIX;
+		uacce->ops->qf_pg_start[UACCE_QFRT_MMIO] = 0;
+		uacce->ops->qf_pg_start[UACCE_QFRT_DKO]  = UACCE_QFR_NA;
+		uacce->ops->qf_pg_start[UACCE_QFRT_DUS]  = QM_DOORBELL_PAGE_NR;
+		uacce->ops->qf_pg_start[UACCE_QFRT_SS]   = QM_DOORBELL_PAGE_NR +
+							   QM_DUS_PAGE_NR;
+		uacce->ops->map = hisi_qm_uacce_map;
+	} else {
+		uacce->ops->flags = UACCE_DEV_SVA | UACCE_DEV_KMAP_DUS;
+		uacce->ops->api_ver = HISI_QM_API_VER_BASE;
+		uacce->ops->qf_pg_start[UACCE_QFRT_MMIO] = 0;
+		uacce->ops->qf_pg_start[UACCE_QFRT_DKO]  = QM_DOORBELL_PAGE_NR;
+		uacce->ops->qf_pg_start[UACCE_QFRT_DUS]  = QM_DOORBELL_PAGE_NR +
+							   QM_DKO_PAGE_NR;
+		uacce->ops->qf_pg_start[UACCE_QFRT_SS]   = QM_DOORBELL_PAGE_NR +
+							   QM_DKO_PAGE_NR +
+							   QM_DUS_PAGE_NR;
+	}
+
+	return uacce_register(uacce);
+}
+#endif
+
 static irqreturn_t qm_irq(int irq, void *data)
 {
 	struct qm_info *qm = data;
@@ -652,8 +894,12 @@ int hisi_qm_init(struct qm_info *qm)
 	}
 
 	if (qm->uacce_mode) {
+#ifdef CONFIG_CRYPTO_QM_UACCE
+		ret = qm_register_uacce(qm);
+#else
 		dev_err(dev, "qm uacce feature is not enabled\n");
 		ret = -EINVAL;
+#endif
 	}
 
 	if (qm->uacce_mode != UACCE_MODE_UACCE) {
@@ -679,6 +925,10 @@ int hisi_qm_init(struct qm_info *qm)
 	return 0;
 
 err_with_uacce:
+#ifdef CONFIG_CRYPTO_QM_UACCE
+	if (qm->uacce_mode)
+		uacce_unregister(&qm->uacce);
+#endif
 err_with_irq:
 	/* even for devm, it should be removed for the irq vec to be freed */
 	devm_free_irq(dev, pci_irq_vector(pdev, 0), qm);
