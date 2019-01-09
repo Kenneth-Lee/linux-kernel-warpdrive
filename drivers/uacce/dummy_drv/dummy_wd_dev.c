@@ -1,0 +1,493 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
+/**
+ * This module is used to test the framework of WarpDrive.
+ *
+ * It creates MAX_DEV platform devices with MAX_QUEUE queue for each. When the
+ * queue is gotten, a kernel thread is created and handle request put into the
+ * queue by the user application.
+ */
+
+#include <linux/module.h>
+#include <linux/printk.h>
+#include <linux/slab.h>
+#include <linux/platform_device.h>
+#include <linux/kthread.h>
+#include <linux/mutex.h>
+#include <asm/page.h>
+#include <linux/uacce.h>
+#include <linux/uaccess.h>
+#include "wd_dummy_usr_if.h"
+#include "dummy_hw_usr_if.h"
+
+#define TEST_CONT_PAGE
+#define TEST_VMAP_IN_MAP
+
+#define MAX_DEV 3
+#define MAX_QUEUE 4
+#define QUEUE_YEILD_MS 50
+#define VERBOSE_LOG
+
+#ifdef VERBOSE_LOG
+#define dummy_log(msg, ...) pr_info("dummy log: " msg, ##__VA_ARGS__)
+#else
+#define dummy_log(msg, ...)
+#endif
+
+#define MODE_MMIO 0	/* use mmio region for bd */
+#define MODE_DSU  1	/* use dsu region for bd */
+static int mode = MODE_DSU;
+module_param(mode, int, 0);
+
+static DEFINE_MUTEX(qsmutex);
+
+struct dummy_hw;
+
+struct dummy_hw_queue {
+	bool used;
+	struct task_struct *tsk;
+	__u32 tail;
+	void *vmap;
+	struct uacce_qfile_region *ss_qfr;
+
+	struct uacce_queue wdq;
+	struct dummy_hw_queue_reg *reg;
+	struct dummy_hw *hw;
+	struct task_struct *work_thread;
+	struct mutex mutex;
+	int is_updated;
+	int devid, qid;
+};
+
+static struct dummy_hw {
+	int max_copy_size;
+	int aflags;
+	struct dummy_hw_queue qs[MAX_QUEUE];
+	struct platform_device *pdev;
+} hws[MAX_DEV];
+
+static int _do_copy(struct uacce_queue *q, void *tgt, void *src, size_t len)
+{
+	struct dummy_hw_queue *hwq = (struct dummy_hw_queue *)q->priv;
+	int ret = 0;
+	size_t iova_base = q->qfrs[UACCE_QFRT_SS]->iova;
+	size_t ktgt = (unsigned long)tgt - iova_base;
+	size_t ksrc = (unsigned long)src - iova_base;
+	size_t range = q->qfrs[UACCE_QFRT_SS]->nr_pages << PAGE_SHIFT;
+
+	if (ktgt > range || ktgt + len> range) {
+		ret = -EINVAL;
+		goto out;
+	}
+
+	if (ksrc > range || ksrc + len > range) {
+		ret = -EINVAL;
+		goto out;
+	}
+
+	ktgt += (unsigned long)hwq->vmap;
+	ksrc += (unsigned long)hwq->vmap;
+	dummy_log("memcpy(%lx, %lx, %lx), va=%lx, kva=%lx\n", ktgt, ksrc, len,
+		iova_base, (unsigned long)hwq->vmap);
+	memcpy((void *)ktgt, (void *)ksrc, len);
+
+out:
+	return ret;
+}
+
+static void _queue_work(struct dummy_hw_queue *hwq)
+{
+	int bd_num;
+	__u32 head;
+	__u32 tail;
+
+
+	mutex_lock(&hwq->mutex);
+
+	bd_num = hwq->reg->ring_bd_num;
+	head = readl(&hwq->reg->head);
+
+	if (head >= bd_num) {
+		pr_err("dummy_wd io error, head=%d\n", head);
+		mutex_unlock(&hwq->mutex);
+		return;
+	}
+
+	tail = hwq->tail;
+	while (hwq->tail != head) {
+		if(hwq->reg->ring[hwq->tail].size > hwq->hw->max_copy_size)
+			hwq->reg->ring[hwq->tail].ret = -EINVAL;
+		else
+			hwq->reg->ring[hwq->tail].ret = _do_copy(&hwq->wdq, 
+				 hwq->reg->ring[hwq->tail].tgt_addr,
+				 hwq->reg->ring[hwq->tail].src_addr,
+				 hwq->reg->ring[hwq->tail].size);
+		dummy_log("memcpy(%p, %p, %ld) = %d",
+			hwq->reg->ring[hwq->tail].tgt_addr,
+			hwq->reg->ring[hwq->tail].src_addr,
+			hwq->reg->ring[hwq->tail].size,
+			hwq->reg->ring[hwq->tail].ret);
+		hwq->reg->ring[hwq->tail].ret = 0;
+		hwq->tail = (hwq->tail+1)%bd_num;
+	}
+
+	if (tail != hwq->tail) {
+		dummy_log("write back tail %d\n", hwq->tail);
+		writel(hwq->tail, &hwq->reg->tail);
+		hwq->is_updated = 1;
+		uacce_wake_up(&hwq->wdq);
+	}
+
+	mutex_unlock(&hwq->mutex);
+}
+
+static int dummy_is_q_updated(struct uacce_queue *q)
+{
+	struct dummy_hw_queue *hwq = q->priv;
+	int updated;
+
+	mutex_lock(&hwq->mutex);
+
+	updated = hwq->is_updated;
+	hwq->is_updated = 0;
+
+	mutex_unlock(&hwq->mutex);
+
+	dummy_log("check q updated: %d\n", updated);
+
+	return updated;
+}
+
+static void dummy_init_hw_queue(struct dummy_hw_queue *hwq, int used, int devid,
+				int qid)
+{
+	if (hwq->used == used)
+		return;
+
+	hwq->used = used;
+	if (used) {
+		hwq->reg = (struct dummy_hw_queue_reg *)
+			__get_free_page(GFP_KERNEL);
+		memcpy(hwq->reg->hw_tag, DUMMY_HW_TAG, DUMMY_HW_TAG_SZ);
+		hwq->reg->ring_bd_num = Q_BDS;
+		writel(0, &hwq->reg->head);
+		writel(0, &hwq->reg->tail);
+		hwq->tail = 0;
+		hwq->is_updated = 0;
+		if (devid >= 0)
+			hwq->devid = devid;
+		if (qid >= 0)
+			hwq->qid = qid;
+
+		mutex_init(&hwq->mutex);
+	} else {
+		free_page((unsigned long)hwq->reg);
+	}
+}
+
+static int dummy_get_queue(struct uacce *uacce, unsigned long arg,
+			   struct uacce_queue **q)
+{
+	int i;
+	struct dummy_hw *hw = (struct dummy_hw *)uacce->priv;
+	struct dummy_hw_queue *devqs = hw->qs;
+
+	BUG_ON(!devqs);
+
+	mutex_lock(&qsmutex);
+	for (i = 0; i < MAX_QUEUE; i++) {
+		if (!devqs[i].used) {
+			dummy_init_hw_queue(&devqs[i], 1, -1, -1);
+			*q = &devqs[i].wdq;
+			devqs[i].wdq.priv = &devqs[i];
+			__module_get(THIS_MODULE);
+			break;
+		}
+	}
+	mutex_unlock(&qsmutex);
+
+	if (i < MAX_QUEUE)
+		return 0;
+
+	return -ENODEV;
+}
+
+static void dummy_put_queue(struct uacce_queue *q)
+{
+	struct dummy_hw_queue *hwq = (struct dummy_hw_queue *)q->priv;
+
+	mutex_lock(&qsmutex);
+	dummy_init_hw_queue(hwq, 0, -1, -1);
+	mutex_unlock(&qsmutex);
+
+	module_put(THIS_MODULE);
+}
+
+static int dummy_mmap(struct uacce_queue *q, struct vm_area_struct *vma,
+		      struct uacce_qfile_region *qfr)
+{
+	struct dummy_hw_queue *hwq = (struct dummy_hw_queue *)q->priv;
+
+	dummy_log("mmap mmio space\n");
+	if (vma->vm_pgoff != 0 || qfr->nr_pages > 1 ||
+	    !(vma->vm_flags & VM_SHARED))
+		return -EINVAL;
+
+	return remap_pfn_range(vma, vma->vm_start, __pa(hwq->reg)>>PAGE_SHIFT,
+			       PAGE_SIZE, vma->vm_page_prot);
+}
+
+static int dummy_map(struct uacce_queue *q, struct uacce_qfile_region *qfr)
+{
+	struct dummy_hw_queue *hwq = (struct dummy_hw_queue *)q->priv;
+
+	dummy_log("map qfr (%s)\n", uacce_qfrt_str(qfr));
+
+	switch (qfr->type) {
+	case UACCE_QFRT_SS:
+		if (hwq->ss_qfr)
+			return -EBUSY;
+		else
+			hwq->ss_qfr = qfr;
+#ifdef TEST_VMAP_IN_MAP
+		hwq->vmap = vmap(hwq->ss_qfr->pages, hwq->ss_qfr->nr_pages,
+				 VM_MAP, PAGE_KERNEL);
+		if (!hwq->vmap)
+			return -ENOMEM;
+
+		dummy_log("vmap virutal address to %lx\n",
+			  (unsigned long)hwq->vmap);
+#endif
+
+		break;
+
+	case UACCE_QFRT_DUS:
+		break;
+
+	default:
+		dev_err(&q->uacce->dev, "map invalid qfr (%s)\n",
+			uacce_qfrt_str(qfr));
+		return -EINVAL;
+	}
+
+	return 0;
+}
+
+static void dummy_unmap(struct uacce_queue *q, struct uacce_qfile_region *qfr)
+{
+	struct dummy_hw_queue *hwq = (struct dummy_hw_queue *)q->priv;
+
+	switch (qfr->type) {
+	case UACCE_QFRT_SS:
+		BUG_ON(hwq->vmap);
+		if (hwq->ss_qfr)
+			hwq->ss_qfr = NULL;
+
+		break;
+
+	case UACCE_QFRT_DUS:
+		break;
+
+	default:
+		dev_err(&q->uacce->dev, "unmap invalid qfr (%s)\n",
+			uacce_qfrt_str(qfr));
+		break;
+	}
+}
+
+static long dummy_ioctl(struct uacce_queue *q, unsigned int cmd,
+				unsigned long arg)
+{
+	struct dummy_hw_queue *hwq = q->priv;
+
+	switch (cmd) {
+	case DUMMY_CMD_FLUSH:
+		_queue_work(hwq);
+		return 0;
+
+	default:
+		return -EINVAL;
+	}
+}
+
+static void dummy_mask_notify(struct uacce_queue *q, int event_mask)
+{
+	dummy_log("mask notify: %x\n", event_mask);
+}
+
+int queue_worker(void *data) {
+	struct dummy_hw_queue *hwq = data;
+
+#ifndef TEST_VMAP_IN_MAP
+	if (hwq->ss_qfr) {
+		BUG_ON(hwq->vmap);
+
+		hwq->vmap = vmap(hwq->ss_qfr->pages, hwq->ss_qfr->nr_pages,
+				 VM_MAP, PAGE_KERNEL);
+		if (!hwq->vmap)
+			return -ENOMEM;
+
+		dummy_log("vmap virutal address to %lx\n",
+			  (unsigned long)hwq->vmap);
+	} else {
+		dev_err(hwq->wdq.uacce->pdev, "ss qfr not mapped\n");
+		return -EINVAL;
+	}
+#endif
+
+	do {
+		_queue_work(hwq);
+		schedule_timeout_interruptible(msecs_to_jiffies(QUEUE_YEILD_MS));
+	} while (!kthread_should_stop());
+	hwq->work_thread = NULL;
+
+	return 0;
+}
+
+static int dummy_start_queue(struct uacce_queue *q)
+{
+	struct dummy_hw_queue *hwq = q->priv;
+	hwq->work_thread = kthread_run(queue_worker, hwq,
+				       "dummy_queue_worker %d-%d",
+				       hwq->devid, hwq->qid);
+	if (PTR_ERR_OR_ZERO(hwq->work_thread))
+		return PTR_ERR(hwq->work_thread);
+
+	dummy_log("queue start\n");
+	return 0;
+}
+
+void dummy_stop_queue(struct uacce_queue *q) {
+	struct dummy_hw_queue *hwq = q->priv;
+
+	if (hwq->work_thread)
+		kthread_stop(hwq->work_thread);
+
+	if (hwq->vmap) {
+		dummy_log("unmap vmap %lx\n", (unsigned long)hwq->vmap);
+		vunmap(hwq->vmap);
+		hwq->vmap = NULL;
+	}
+}
+
+static struct uacce_ops dummy_ops = {
+	.owner = THIS_MODULE,
+	.api_ver = "dummy_v1",
+	.qf_pg_start = { 0, UACCE_QFR_NA,
+			 DUMMY_DUS_START >> PAGE_SHIFT,
+			 DUMMY_SS_START >> PAGE_SHIFT
+	},
+
+#ifdef TEST_CONT_PAGE
+	.flags = UACCE_DEV_NOIOMMU | UACCE_DEV_CONT_PAGE,
+#else
+	.flags = UACCE_DEV_NOIOMMU,
+#endif
+
+	.get_queue = dummy_get_queue,
+	.put_queue = dummy_put_queue,
+	.start_queue = dummy_start_queue,
+	.stop_queue = dummy_stop_queue,
+	.is_q_updated = dummy_is_q_updated,
+	.mmap = dummy_mmap,
+	.map = dummy_map,
+	.unmap = dummy_unmap,
+	.ioctl = dummy_ioctl,
+	.mask_notify = dummy_mask_notify,
+};
+
+static int dummy_wd_probe(struct platform_device *pdev)
+{
+	struct uacce *uacce;
+	struct dummy_hw *hw;
+	int i;
+
+	if (pdev->id >= MAX_DEV) {
+		dev_err(&pdev->dev, "invalid id (%d) for dummy_wd\n", pdev->id);
+		return -EINVAL;
+	}
+
+	hw = &hws[pdev->id];
+	hw->aflags = 0;
+	hw->max_copy_size = 4096;
+
+	uacce = devm_kzalloc(&pdev->dev, sizeof(struct uacce), GFP_KERNEL);
+	if (!uacce)
+		return -ENOMEM;
+
+	for (i = 0; i < MAX_QUEUE; i++) {
+		dummy_init_hw_queue(&hw->qs[i], 0, pdev->id, i);
+		hw->qs[i].wdq.uacce = uacce;
+		hw->qs[i].hw = hw;
+	}
+
+	platform_set_drvdata(pdev, uacce);
+	uacce->name = DUMMY_WD;
+	uacce->pdev = &pdev->dev;
+	uacce->priv = hw;
+	uacce->ops = &dummy_ops;
+	uacce->drv_name = DUMMY_WD;
+	uacce->algs = "memcpy\n";
+
+	return uacce_register(uacce);
+}
+
+static int dummy_wd_remove(struct platform_device *pdev)
+{
+	struct uacce *uacce = (struct uacce *)pdev->dev.driver_data;
+	uacce_unregister(uacce);
+	return 0;
+}
+
+static struct platform_driver dummy_pdrv = {
+	.probe		= dummy_wd_probe,
+	.remove		= dummy_wd_remove,
+	.driver		= {
+		.name		= DUMMY_WD,
+	},
+};
+
+static int __init dummy_uacce_init(void)
+{
+	int i, j;
+	int ret = platform_driver_register(&dummy_pdrv);
+
+	if (ret)
+		return ret;
+
+	for (i = 0; i < MAX_DEV; i++) {
+		hws[i].pdev = platform_device_alloc(DUMMY_WD, i);
+		BUG_ON(!hws[i].pdev);
+		ret = platform_device_add(hws[i].pdev);
+		if (ret)
+			goto dev_reg_fail;
+	}
+
+	return 0;
+
+
+dev_reg_fail:
+	for (j = i - 1; j >= 0; j--) {
+		if(hws[i].pdev)
+			platform_device_put(hws[i].pdev);
+	}
+
+	platform_driver_unregister(&dummy_pdrv);
+
+	return ret;
+}
+
+static void __exit dummy_uacce_exit(void)
+{
+	int i;
+
+	for (i = MAX_DEV - 1; i >= 0; i--)
+		platform_device_unregister(hws[i].pdev);
+
+	platform_driver_unregister(&dummy_pdrv);
+}
+
+module_init(dummy_uacce_init);
+module_exit(dummy_uacce_exit);
+
+MODULE_AUTHOR("Kenneth Lee<liguozhu@hisilicon.com>");
+MODULE_LICENSE("GPL");
