@@ -791,7 +791,7 @@ static ssize_t uacce_dev_show_id(struct device *dev,
 				 struct device_attribute *attr, char *buf)
 {
 	struct uacce *uacce = UACCE_FROM_CDEV_ATTR(dev);
-	return sprintf(buf, "%d", uacce->dev_id);
+	return sprintf(buf, "%d\n", uacce->dev_id);
 }
 static DEVICE_ATTR(id, S_IRUGO, uacce_dev_show_id, NULL);
 
