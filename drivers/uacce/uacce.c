@@ -1,7 +1,9 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 #include <linux/compat.h>
+#include <linux/dma-iommu.h>
 #include <linux/file.h>
 #include <linux/idr.h>
+#include <linux/irqdomain.h>
 #include <linux/list.h>
 #include <linux/module.h>
 #include <linux/poll.h>
@@ -346,8 +348,11 @@ static long uacce_cmd_share_qfr(struct uacce_queue *tgt, int fd)
 		return -EINVAL;
 
 	/* no ssva is needed if the dev can do fault-from-dev */
-	if (tgt->uacce->ops->flags | UACCE_DEV_FAULT_FROM_DEV)
+	if (tgt->uacce->ops->flags & UACCE_DEV_FAULT_FROM_DEV)
 		return -EINVAL;
+
+	dev_dbg(&src->uacce->dev, "share ss with %s\n",
+		dev_name(&tgt->uacce->dev));
 
 	uacce_qs_wlock();
 	if (!src->qfrs[UACCE_QFRT_SS] || tgt->qfrs[UACCE_QFRT_SS]) {
@@ -384,21 +389,22 @@ static int uacce_start_queue(struct uacce_queue *q)
 					  PAGE_KERNEL);
 			if (!qfr->kaddr) {
 				ret = -ENOMEM;
-				dev_dbg(dev, "kmap %s qfr to %p\n",
-					uacce_qfrt_str(qfr), qfr->kaddr);
+				dev_dbg(dev, "fail to kmap %s qfr(%d pages)\n",
+					uacce_qfrt_str(qfr), qfr->nr_pages);
 				goto err_with_vmap;
 			}
 
-			dev_dbg(dev, "kmap %s qfr to %p\n",
-				uacce_qfrt_str(qfr), qfr->kaddr);
+			dev_dbg(dev, "kernel vmap %s qfr(%d pages) to %lx\n",
+				uacce_qfrt_str(qfr), qfr->nr_pages,
+				(unsigned long)qfr->kaddr);
 		}
 	}
 
 	ret = q->uacce->ops->start_queue(q);
-	if (ret)
+	if (ret < 0)
 		goto err_with_vmap;
 
-	dev_dbg(&q->uacce->dev, "queue started\n");
+	dev_dbg(&q->uacce->dev, "uacce state switch to STARTED\n");
 	atomic_set(&q->uacce->state, UACCE_ST_STARTED);
 	return 0;
 
@@ -416,8 +422,8 @@ err_with_vmap:
 static long uacce_get_ss_pa(struct uacce_queue *q, void __user *arg)
 {
 	struct uacce *uacce = q->uacce;
-	long ret;
-	unsigned long pa;
+	long ret = 0;
+	unsigned long pa = 0;
 
 	if (!(uacce->ops->flags & UACCE_DEV_CONT_PAGE))
 		return -EINVAL;
@@ -427,15 +433,13 @@ static long uacce_get_ss_pa(struct uacce_queue *q, void __user *arg)
 		WARN_ON(!q->qfrs[UACCE_QFRT_SS]->cont_pages);
 		pa = page_to_phys(q->qfrs[UACCE_QFRT_SS]->cont_pages);
 
-		dev_dbg(&uacce->dev, "uacce_get_ss_pa(pfn=%lx, pa=%lx\n",
-			page_to_pfn(q->qfrs[UACCE_QFRT_SS]->cont_pages), pa);
-		if (copy_to_user(arg, &pa, sizeof(pa)))
-			ret = -EFAULT;
-		else
-			ret = 0;
+		dev_dbg(&uacce->dev, "uacce_get_ss_pa(%lx)\n", pa);
 	} else
 		ret = -EINVAL;
 	uacce_qs_wunlock();
+
+	if (copy_to_user(arg, &pa, sizeof(pa)))
+		ret = -EFAULT;
 
 	return ret;
 }
@@ -487,10 +491,13 @@ static int uacce_dev_open_check(struct uacce *uacce)
 	if (uacce->ops->flags & (UACCE_DEV_PASID | UACCE_DEV_NOIOMMU))
 		return 0;
 
-	if (atomic_cmpxchg(&uacce->state, UACCE_ST_INIT, UACCE_ST_OPENNED)) {
+	if (atomic_cmpxchg(&uacce->state, UACCE_ST_INIT, UACCE_ST_OPENNED) 
+	    != UACCE_ST_INIT) {
 		dev_info(&uacce->dev, "this device can be openned only once\n");
 		return -EBUSY;
 	}
+
+	dev_dbg(&uacce->dev, "state switch to OPENNED");
 
 	return 0;
 }
@@ -529,8 +536,6 @@ static int uacce_fops_open(struct inode *inode, struct file *filep)
 	init_waitqueue_head(&q->wait);
 	filep->private_data = q;
 
-	__module_get(uacce->ops->owner);
-	atomic_set(&uacce->state, UACCE_ST_INIT);
 	return 0;
 }
 
@@ -547,6 +552,9 @@ static int uacce_fops_release(struct inode *inode, struct file *filep)
 	if (atomic_read(&uacce->state) == UACCE_ST_STARTED &&
 	    uacce->ops->stop_queue)
 		uacce->ops->stop_queue(q);
+
+	if (uacce->ops->put_queue)
+		uacce->ops->put_queue(q);
 
 	uacce_qs_wlock();
 
@@ -583,12 +591,8 @@ static int uacce_fops_release(struct inode *inode, struct file *filep)
 		iommu_sva_unbind_device(uacce->pdev, q->pasid);
 #endif
 
-	if (uacce->ops->put_queue)
-		uacce->ops->put_queue(q);
-
-	module_put(uacce->ops->owner);
+	dev_dbg(&uacce->dev, "uacce state switch to INIT");
 	atomic_set(&uacce->state, UACCE_ST_INIT);
-
 	return 0;
 }
 
@@ -843,7 +847,7 @@ static ssize_t uacce_dev_show_available_instances(struct device *dev,
 {
 	struct uacce *uacce = UACCE_FROM_CDEV_ATTR(dev);
 
-	return sprintf(buf, "%d\n", uacce->available_instances);
+	return sprintf(buf, "%d\n", uacce->ops->get_available_instances(uacce));
 }
 static DEVICE_ATTR(available_instances, S_IRUGO,
 	    uacce_dev_show_available_instances, NULL);
@@ -922,6 +926,11 @@ static int uacce_default_map(struct uacce_queue *q,
 	return -ENODEV;
 }
 
+static int uacce_default_get_available_instances(struct uacce *uacce)
+{
+	return -1;
+}
+
 static int uacce_default_start_queue(struct uacce_queue *q)
 {
 	dev_dbg(&q->uacce->dev, "fake start queue");
@@ -943,9 +952,47 @@ static int uacce_dev_match(struct device *dev, void *data)
 	return 0;
 }
 
+/* Borrowed from VFIO */
+static bool uacce_iommu_has_sw_msi(struct iommu_group *group,
+				   phys_addr_t *base)
+{
+	struct list_head group_resv_regions;
+	struct iommu_resv_region *region, *next;
+	bool ret = false;
+
+	INIT_LIST_HEAD(&group_resv_regions);
+	iommu_get_group_resv_regions(group, &group_resv_regions);
+	list_for_each_entry(region, &group_resv_regions, list) {
+		pr_debug("uacce: find a resv region (%d) on %llx\n",
+			 region->type, region->start);
+
+		/*
+		 * The presence of any 'real' MSI regions should take
+		 * precedence over the software-managed one if the
+		 * IOMMU driver happens to advertise both types.
+		 */
+		if (region->type == IOMMU_RESV_MSI) {
+			ret = false;
+			break;
+		}
+
+		if (region->type == IOMMU_RESV_SW_MSI) {
+			*base = region->start;
+			ret = true;
+		}
+	}
+	list_for_each_entry_safe(region, next, &group_resv_regions, list)
+		kfree(region);
+	return ret;
+}
+
 static int uacce_set_iommu_domain(struct uacce *uacce)
 {
 	struct iommu_domain *domain;
+	struct iommu_group *group;
+	struct device *dev = uacce->pdev;
+	bool resv_msi, msi_remap;
+	phys_addr_t resv_msi_base = 0;
 	int ret;
 
 	if (uacce->ops->flags & UACCE_DEV_NOIOMMU)
@@ -962,18 +1009,45 @@ static int uacce_set_iommu_domain(struct uacce *uacce)
 
 	/* allocate and attach a unmanged domain */
 	domain = iommu_domain_alloc(uacce->pdev->bus);
-	if (!domain)
+	if (!domain) {
+		dev_dbg(&uacce->dev, "cannot get domain for iommu\n");
 		return -ENODEV;
+	}
 
 	ret = iommu_attach_device(domain, uacce->pdev);
 	if (ret)
 		goto err_with_domain;
 
-	if (iommu_capable(uacce->pdev->bus, IOMMU_CAP_CACHE_COHERENCY)) {
+	if (iommu_capable(dev->bus, IOMMU_CAP_CACHE_COHERENCY)) {
 		uacce->prot |= IOMMU_CACHE;
-		dev_dbg(&uacce->dev, "Enable uacce with c-coherent capa\n");
-	} else {
-		dev_dbg(&uacce->dev, "Enable uacce without c-coherent cap\n");
+		dev_dbg(dev, "Enable uacce with c-coherent capa\n");
+	} else
+		dev_dbg(dev, "Enable uacce without c-coherent capa\n");
+
+	group = iommu_group_get(dev);
+	if (!group) {
+		ret = -EINVAL;
+		goto err_with_domain;
+	}
+
+	resv_msi = uacce_iommu_has_sw_msi(group, &resv_msi_base);
+	iommu_group_put(group);
+
+	msi_remap = irq_domain_check_msi_remap() ||
+		    iommu_capable(dev->bus, IOMMU_CAP_INTR_REMAP);
+
+	if (!msi_remap) {
+		dev_warn(dev, "No interrupt remapping support!");
+		ret = -EPERM;
+		goto err_with_domain;
+	}
+
+	if (resv_msi) {
+		dev_dbg(dev, "Set resv msi %llx on iommu domain\n",
+			(u64)resv_msi_base);
+		ret = iommu_get_msi_cookie(domain, resv_msi_base);
+		if (ret)
+			goto err_with_domain;
 	}
 
 	return 0;
@@ -986,6 +1060,9 @@ err_with_domain:
 void uacce_unset_iommu_domain(struct uacce *uacce)
 {
 	struct iommu_domain *domain;
+
+	if (uacce->ops->flags & UACCE_DEV_NOIOMMU)
+		return;
 
 	domain = iommu_get_domain_for_dev(uacce->pdev);
 	if (domain) {
@@ -1003,8 +1080,17 @@ int uacce_register(struct uacce *uacce)
 {
 	int ret;
 
-	if (!uacce->pdev)
+	if (!uacce->pdev) {
+		pr_debug("uacce parent device not set\n");
 		return -ENODEV;
+	}
+
+	if (uacce->ops->flags & UACCE_DEV_NOIOMMU) {
+		add_taint(TAINT_CRAP, LOCKDEP_STILL_OK);
+		dev_warn(&uacce->dev, "device register to noiommu mode, "
+			"this may export kernel data to user space and "
+			"open the kernel for user attacked");
+	}
 
 	/* if dev support fault-from-dev, it should support pasid */
 	if ((uacce->ops->flags & UACCE_DEV_FAULT_FROM_DEV) &&
@@ -1021,6 +1107,10 @@ int uacce_register(struct uacce *uacce)
 
 	if (!uacce->ops->start_queue)
 		uacce->ops->start_queue = uacce_default_start_queue;
+
+	if (!uacce->ops->get_available_instances)
+		uacce->ops->get_available_instances =
+			uacce_default_get_available_instances;
 
 	ret = uacce_set_iommu_domain(uacce);
 	if (ret)
@@ -1045,6 +1135,7 @@ int uacce_register(struct uacce *uacce)
 			~(UACCE_DEV_FAULT_FROM_DEV | UACCE_DEV_PASID);
 #endif
 
+	dev_dbg(&uacce->dev, "uacce state set to INIT");
 	atomic_set(&uacce->state, UACCE_ST_INIT);
 	mutex_unlock(&uacce_mutex);
 	return 0;

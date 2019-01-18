@@ -62,6 +62,7 @@ struct uacce_ops {
 	int flags;
 	unsigned long qf_pg_start[UACCE_QFRT_MAX];
 
+	int (*get_available_instances)(struct uacce *uacce);
 	int (*get_queue)(struct uacce *uacce, unsigned long arg,
 		struct uacce_queue **q);
 	void (*put_queue)(struct uacce_queue *q);
@@ -104,7 +105,6 @@ struct uacce {
 	const char *drv_name;
 	const char *algs;
 	int status;
-	int available_instances;
 	struct uacce_ops *ops;
 	struct device *pdev;
 	bool is_vf;
