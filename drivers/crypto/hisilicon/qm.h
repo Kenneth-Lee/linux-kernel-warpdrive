@@ -1,16 +1,19 @@
-/* SPDX-License-Identifier: GPL-2.0+ */
+// SPDX-License-Identifier: GPL-2.0
+/* Copyright (c) 2018 Hisilicon Limited. */
 #ifndef HISI_ACC_QM_H
 #define HISI_ACC_QM_H
 
+#include <linux/dmapool.h>
 #include <linux/iopoll.h>
 #include <linux/module.h>
 #include <linux/pci.h>
 #include <linux/slab.h>
-#include "qm_usr_if.h"
 
 #ifdef CONFIG_CRYPTO_QM_UACCE
 #include <linux/uacce.h>
 #endif
+
+#include "qm_usr_if.h"
 
 /* qm user domain */
 #define QM_ARUSER_M_CFG_1		0x100088
@@ -26,21 +29,91 @@
 #define QM_PEH_AXUSER_CFG		0x1000cc
 #define QM_PEH_AXUSER_CFG_ENABLE	0x1000d0
 
-struct eqe {
+#define QM_DFX_MB_CNT_VF		0x104010
+#define QM_DFX_DB_CNT_VF		0x104020
+
+#define QM_AXI_RRESP			BIT(0)
+#define QM_AXI_BRESP			BIT(1)
+#define QM_ECC_MBIT			BIT(2)
+#define QM_ECC_1BIT			BIT(3)
+#define QM_ACC_GET_TASK_TIMEOUT		BIT(4)
+#define QM_ACC_DO_TASK_TIMEOUT		BIT(5)
+#define QM_ACC_WB_NOT_READY_TIMEOUT	BIT(6)
+#define QM_SQ_CQ_VF_INVALID		BIT(7)
+#define QM_CQ_VF_INVALID		BIT(8)
+#define QM_SQ_VF_INVALID		BIT(9)
+#define QM_DB_TIMEOUT			BIT(10)
+#define QM_OF_FIFO_OF			BIT(11)
+#define QM_DB_RANDOM_INVALID		BIT(12)
+
+#define QM_BASE_NFE	(QM_AXI_RRESP | QM_AXI_BRESP | QM_ECC_MBIT | \
+			 QM_ACC_GET_TASK_TIMEOUT | QM_ACC_DO_TASK_TIMEOUT | \
+			 QM_DB_TIMEOUT | QM_OF_FIFO_OF)
+#define QM_BASE_CE			QM_ECC_1BIT
+
+enum qm_state {
+	QM_RESET,
+};
+
+enum qp_state {
+	QP_STOP,
+	QP_FULL,
+};
+
+enum qm_hw_ver {
+	QM_HW_UNKNOWN = -1,
+	QM_HW_V1 = 1,
+	QM_HW_V2,
+};
+
+enum qm_fun_type {
+	QM_HW_PF,
+	QM_HW_VF,
+};
+
+enum qm_debug_file {
+	CURRENT_Q,
+	CLEAR_ENABLE,
+	DEBUG_FILE_NUM,
+};
+
+struct debugfs_file {
+	enum qm_debug_file index;
+	struct mutex lock;
+	struct qm_debug *debug;
+};
+
+struct qm_debug {
+	struct dentry *debug_root;
+	struct dentry *qm_d;
+	struct debugfs_file files[DEBUG_FILE_NUM];
+};
+
+struct qm_cqe {
+	__le32 rsvd0;
+	__le16 cmd_id;
+	__le16 rsvd1;
+	__le16 sq_head;
+	__le16 sq_num;
+	__le16 rsvd2;
+	__le16 w7;
+};
+
+struct qm_eqe {
 	__le32 dw0;
 };
 
-struct aeqe {
+struct qm_aeqe {
 	__le32 dw0;
 };
 
-struct sqc {
+struct qm_sqc {
 	__le16 head;
 	__le16 tail;
 	__le32 base_l;
 	__le32 base_h;
 	__le32 dw3;
-	__le16 qes;
+	__le16 w8;
 	__le16 rsvd0;
 	__le16 pasid;
 	__le16 w11;
@@ -49,13 +122,13 @@ struct sqc {
 	__le32 rsvd1;
 };
 
-struct cqc {
+struct qm_cqc {
 	__le16 head;
 	__le16 tail;
 	__le32 base_l;
 	__le32 base_h;
 	__le32 dw3;
-	__le16 qes;
+	__le16 w8;
 	__le16 rsvd0;
 	__le16 pasid;
 	__le16 w11;
@@ -63,18 +136,7 @@ struct cqc {
 	__le32 rsvd1;
 };
 
-#define INIT_QC(qc, base) do { \
-	(qc)->head = 0; \
-	(qc)->tail = 0; \
-	(qc)->base_l = lower_32_bits((unsigned long)base); \
-	(qc)->base_h = upper_32_bits((unsigned long)base); \
-	(qc)->pasid = 0; \
-	(qc)->w11 = 0; \
-	(qc)->rsvd1 = 0; \
-	(qc)->qes = QM_Q_DEPTH - 1; \
-} while (0)
-
-struct eqc {
+struct qm_eqc {
 	__le16 head;
 	__le16 tail;
 	__le32 base_l;
@@ -84,16 +146,17 @@ struct eqc {
 	__le32 dw6;
 };
 
-struct aeqc {
+struct qm_aeqc {
 	__le16 head;
 	__le16 tail;
 	__le32 base_l;
 	__le32 base_h;
-	__le32 rsvd[3];
+	__le32 dw3;
+	__le32 rsvd[2];
 	__le32 dw6;
 };
 
-struct mailbox {
+struct qm_mailbox {
 	__le16 w0;
 	__le16 queue_num;
 	__le32 base_l;
@@ -101,7 +164,7 @@ struct mailbox {
 	__le32 rsvd;
 };
 
-struct doorbell {
+struct qm_doorbell {
 	__le16 queue_num;
 	__le16 cmd;
 	__le16 index;
@@ -114,25 +177,24 @@ struct qm_dma {
 	size_t size;
 };
 
-struct qm_info {
-	int ver;
+struct hisi_qm {
+	enum qm_hw_ver ver;
+	enum qm_fun_type fun_type;
+	const char *dev_name;
 	struct pci_dev *pdev;
-
-	resource_size_t phys_base;
-	resource_size_t size;
 	void __iomem *io_base;
-
 	u32 sqe_size;
 	u32 qp_base;
 	u32 qp_num;
+	unsigned long flags;
 
 	struct qm_dma qdma;
-	struct sqc *sqc;
-	struct cqc *cqc;
-	struct eqc *eqc;
-	struct eqe *eqe;
-	struct aeqc *aeqc;
-	struct aeqe *aeqe;
+	struct qm_sqc *sqc;
+	struct qm_cqc *cqc;
+	struct qm_eqc *eqc;
+	struct qm_eqe *eqe;
+	struct qm_aeqc *aeqc;
+	struct qm_aeqe *aeqe;
 	unsigned long sqc_dma,
 		      cqc_dma,
 		      eqc_dma,
@@ -141,6 +203,7 @@ struct qm_info {
 		      aeqe_dma;
 
 	u32 eq_head;
+	u32 aeq_head;
 
 	rwlock_t qps_lock;
 	unsigned long *qp_bitmap;
@@ -148,80 +211,85 @@ struct qm_info {
 
 	struct mutex mailbox_lock;
 
-	struct hisi_acc_qm_hw_ops *ops;
+	const struct hisi_qm_hw_ops *ops;
 
-	int uacce_mode;
+	struct qm_debug debug;
+
+	u32 error_mask;
+	u32 msi_mask;
+
 	const char *algs;
+	bool use_dma_api;	/* use dma or iommu api api */
+	bool use_uacce;		/* register to uacce */
 
 #ifdef CONFIG_CRYPTO_QM_UACCE
+	resource_size_t phys_base;
+	resource_size_t size;
 	struct uacce uacce;
 #endif
 };
-#define QM_ADDR(qm, off) ((qm)->io_base + off)
 
-struct hisi_acc_qp_status {
+struct hisi_qp_status {
+	atomic_t used;
 	u16 sq_tail;
 	u16 sq_head;
 	u16 cq_head;
-	u16 sqn;
 	bool cqc_phase;
-	int is_sq_full;
+	unsigned long flags;
 };
-
-struct hisi_qp;
 
 struct hisi_qp_ops {
 	int (*fill_sqe)(void *sqe, void *q_parm, void *d_parm);
 };
 
 struct hisi_qp {
-	/* sq number in this function */
-	u32 queue_id;
+	u32 qp_id;
 	u8 alg_type;
 	u8 req_type;
-	int pasid;
 
 	struct qm_dma qdma;
-	struct sqc *sqc;
-	struct cqc *cqc;
+	struct qm_sqc *sqc;
+	struct qm_cqc *cqc;
 	void *sqe;
-	struct cqe *cqe;
+	struct qm_cqe *cqe;
 
 	unsigned long sqc_dma,
 		      cqc_dma,
 		      sqe_dma,
 		      cqe_dma;
 
-	struct hisi_acc_qp_status qp_status;
-
-	struct qm_info *qm;
-
-#ifdef CONFIG_CRYPTO_QM_UACCE
-	struct uacce_queue *uacce_q;
-#endif
-
-	/* for crypto sync API */
+	struct hisi_qp_status qp_status;
 	struct completion completion;
-
 	struct hisi_qp_ops *hw_ops;
 	void *qp_ctx;
+	void (*req_cb)(struct hisi_qp *qp, void *data);
 	void (*event_cb)(struct hisi_qp *qp);
-	void (*req_cb)(struct hisi_qp *qp, unsigned long data);
+
+	struct hisi_qm *qm;
+
+#ifdef CONFIG_CRYPTO_QM_UACCE
+	u16 pasid;
+	struct uacce_queue *uacce_q;
+#endif
 };
 
-/* QM external interface for accelerator driver.
- * To use qm:
- * 1. Set qm with pdev, uacce_mode, and sqe_size set accordingly
- * 2. hisi_qm_init()
- * 3. config the accelerator hardware
- * 4. hisi_qm_start()
- */
-extern int hisi_qm_init(struct qm_info *qm);
-extern void hisi_qm_uninit(struct qm_info *qm);
-extern int hisi_qm_start(struct qm_info *qm);
-extern void hisi_qm_stop(struct qm_info *qm);
-extern struct hisi_qp *hisi_qm_create_qp(struct qm_info *qm, u8 alg_type);
-extern int hisi_qm_start_qp(struct hisi_qp *qp, unsigned long arg);
-extern void hisi_qm_release_qp(struct hisi_qp *qp);
-extern int hisi_qp_send(struct hisi_qp *qp, void *msg);
+int hisi_qm_init(struct hisi_qm *qm);
+void hisi_qm_uninit(struct hisi_qm *qm);
+int hisi_qm_start(struct hisi_qm *qm);
+int __hisi_qm_start(struct hisi_qm *qm);
+int hisi_qm_stop(struct hisi_qm *qm);
+struct hisi_qp *hisi_qm_create_qp(struct hisi_qm *qm, u8 alg_type);
+int hisi_qm_start_qp(struct hisi_qp *qp, unsigned long arg);
+int hisi_qm_stop_qp(struct hisi_qp *qp);
+void hisi_qm_release_qp(struct hisi_qp *qp);
+int hisi_qp_send(struct hisi_qp *qp, void *msg);
+int hisi_qp_wait(struct hisi_qp *qp);
+int hisi_qm_get_vft(struct hisi_qm *qm, u32 *base, u32 *number);
+int hisi_qm_set_vft(struct hisi_qm *qm, u32 fun_num, u32 base, u32 number);
+int hisi_qm_debug_init(struct hisi_qm *qm);
+void hisi_qm_hw_error_init(struct hisi_qm *qm, u32 ce, u32 nfe, u32 fe,
+			   u32 msi);
+int hisi_qm_hw_error_handle(struct hisi_qm *qm);
+void hisi_qm_clear_queues(struct hisi_qm *qm);
+enum qm_hw_ver hisi_qm_get_hw_version(struct pci_dev *pdev);
 #endif
