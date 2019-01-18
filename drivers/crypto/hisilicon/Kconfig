@@ -30,3 +30,12 @@ config CRYPTO_DEV_HISI_ZIP
 	select CRYPTO_DEV_HISI_QM
 	help
 	  Support for HiSilicon HIP08 ZIP Driver.
+
+config CRYPTO_DEV_HISI_HPRE
+	tristate "Support for HISI HPRE Engine"
+	depends on ARM64
+	select CRYPTO_DEV_HISI_QM
+	select CRYPTO_DH
+	select CRYPTO_RSA
+	help
+	  Support for HiSilicon HIP09 HPRE engine.
