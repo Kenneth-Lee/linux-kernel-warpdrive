@@ -553,9 +553,6 @@ static int uacce_fops_release(struct inode *inode, struct file *filep)
 	    uacce->ops->stop_queue)
 		uacce->ops->stop_queue(q);
 
-	if (uacce->ops->put_queue)
-		uacce->ops->put_queue(q);
-
 	uacce_qs_wlock();
 
 	for (i = 0; i < UACCE_QFRT_MAX; i++) {
@@ -591,7 +588,10 @@ static int uacce_fops_release(struct inode *inode, struct file *filep)
 		iommu_sva_unbind_device(uacce->pdev, q->pasid);
 #endif
 
-	dev_dbg(&uacce->dev, "uacce state switch to INIT");
+	if (uacce->ops->put_queue)
+		uacce->ops->put_queue(q);
+
+	dev_dbg(&uacce->dev, "uacce state switch to INIT\n");
 	atomic_set(&uacce->state, UACCE_ST_INIT);
 	return 0;
 }
@@ -1087,7 +1087,7 @@ int uacce_register(struct uacce *uacce)
 
 	if (uacce->ops->flags & UACCE_DEV_NOIOMMU) {
 		add_taint(TAINT_CRAP, LOCKDEP_STILL_OK);
-		dev_warn(&uacce->dev, "device register to noiommu mode, "
+		dev_warn(uacce->pdev, "device register to noiommu mode, "
 			"this may export kernel data to user space and "
 			"open the kernel for user attacked");
 	}
@@ -1135,7 +1135,7 @@ int uacce_register(struct uacce *uacce)
 			~(UACCE_DEV_FAULT_FROM_DEV | UACCE_DEV_PASID);
 #endif
 
-	dev_dbg(&uacce->dev, "uacce state set to INIT");
+	dev_dbg(&uacce->dev, "uacce state initialized to INIT");
 	atomic_set(&uacce->state, UACCE_ST_INIT);
 	mutex_unlock(&uacce_mutex);
 	return 0;
