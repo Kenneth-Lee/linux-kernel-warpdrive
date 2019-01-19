@@ -27,12 +27,6 @@
 #define QUEUE_YEILD_MS 50
 #define VERBOSE_LOG
 
-#ifdef VERBOSE_LOG
-#define dummy_log(msg, ...) pr_info("dummy log: " msg, ##__VA_ARGS__)
-#else
-#define dummy_log(msg, ...)
-#endif
-
 #define MODE_MMIO 0	/* use mmio region for bd */
 #define MODE_DSU  1	/* use dsu region for bd */
 static int mode = MODE_DSU;
@@ -86,8 +80,8 @@ static int _do_copy(struct uacce_queue *q, void *tgt, void *src, size_t len)
 
 	ktgt += (unsigned long)hwq->vmap;
 	ksrc += (unsigned long)hwq->vmap;
-	dummy_log("memcpy(%lx, %lx, %lx), va=%lx, kva=%lx\n", ktgt, ksrc, len,
-		iova_base, (unsigned long)hwq->vmap);
+	dev_dbg(&q->uacce->dev, "memcpy(%lx, %lx, %lx), va=%lx, kva=%lx\n",
+		ktgt, ksrc, len, iova_base, (unsigned long)hwq->vmap);
 	memcpy((void *)ktgt, (void *)ksrc, len);
 
 out:
@@ -99,7 +93,7 @@ static void _queue_work(struct dummy_hw_queue *hwq)
 	int bd_num;
 	__u32 head;
 	__u32 tail;
-
+	struct device *dev = &hwq->wdq.uacce->dev;
 
 	mutex_lock(&hwq->mutex);
 
@@ -107,7 +101,7 @@ static void _queue_work(struct dummy_hw_queue *hwq)
 	head = readl(&hwq->reg->head);
 
 	if (head >= bd_num) {
-		pr_err("dummy_wd io error, head=%d\n", head);
+		dev_err(dev, "dummy_wd io error, head=%d\n", head);
 		mutex_unlock(&hwq->mutex);
 		return;
 	}
@@ -121,7 +115,7 @@ static void _queue_work(struct dummy_hw_queue *hwq)
 				 hwq->reg->ring[hwq->tail].tgt_addr,
 				 hwq->reg->ring[hwq->tail].src_addr,
 				 hwq->reg->ring[hwq->tail].size);
-		dummy_log("memcpy(%p, %p, %ld) = %d",
+		dev_dbg(dev, "memcpy(%p, %p, %ld) = %d",
 			hwq->reg->ring[hwq->tail].tgt_addr,
 			hwq->reg->ring[hwq->tail].src_addr,
 			hwq->reg->ring[hwq->tail].size,
@@ -131,7 +125,7 @@ static void _queue_work(struct dummy_hw_queue *hwq)
 	}
 
 	if (tail != hwq->tail) {
-		dummy_log("write back tail %d\n", hwq->tail);
+		dev_dbg(dev, "write back tail %d\n", hwq->tail);
 		writel(hwq->tail, &hwq->reg->tail);
 		hwq->is_updated = 1;
 		uacce_wake_up(&hwq->wdq);
@@ -152,36 +146,9 @@ static int dummy_is_q_updated(struct uacce_queue *q)
 
 	mutex_unlock(&hwq->mutex);
 
-	dummy_log("check q updated: %d\n", updated);
+	dev_dbg(&q->uacce->dev, "check q updated: %d\n", updated);
 
 	return updated;
-}
-
-static void dummy_init_hw_queue(struct dummy_hw_queue *hwq, int used, int devid,
-				int qid)
-{
-	if (hwq->used == used)
-		return;
-
-	hwq->used = used;
-	if (used) {
-		hwq->reg = (struct dummy_hw_queue_reg *)
-			__get_free_page(GFP_KERNEL);
-		memcpy(hwq->reg->hw_tag, DUMMY_HW_TAG, DUMMY_HW_TAG_SZ);
-		hwq->reg->ring_bd_num = Q_BDS;
-		writel(0, &hwq->reg->head);
-		writel(0, &hwq->reg->tail);
-		hwq->tail = 0;
-		hwq->is_updated = 0;
-		if (devid >= 0)
-			hwq->devid = devid;
-		if (qid >= 0)
-			hwq->qid = qid;
-
-		mutex_init(&hwq->mutex);
-	} else {
-		free_page((unsigned long)hwq->reg);
-	}
 }
 
 static int dummy_get_queue(struct uacce *uacce, unsigned long arg,
@@ -196,10 +163,14 @@ static int dummy_get_queue(struct uacce *uacce, unsigned long arg,
 	mutex_lock(&qsmutex);
 	for (i = 0; i < MAX_QUEUE; i++) {
 		if (!devqs[i].used) {
-			dummy_init_hw_queue(&devqs[i], 1, -1, -1);
+			devqs[i].used = 1;
+			devqs[i].reg->head = 0;
+			devqs[i].reg->tail = 0;
+			devqs[i].tail = 0;
+			devqs[i].is_updated = 0;
 			*q = &devqs[i].wdq;
 			devqs[i].wdq.priv = &devqs[i];
-			__module_get(THIS_MODULE);
+			dev_dbg(uacce->pdev, "allocate hw q %d\n", i);
 			break;
 		}
 	}
@@ -216,10 +187,8 @@ static void dummy_put_queue(struct uacce_queue *q)
 	struct dummy_hw_queue *hwq = (struct dummy_hw_queue *)q->priv;
 
 	mutex_lock(&qsmutex);
-	dummy_init_hw_queue(hwq, 0, -1, -1);
+	hwq->used = 0;
 	mutex_unlock(&qsmutex);
-
-	module_put(THIS_MODULE);
 }
 
 static int dummy_mmap(struct uacce_queue *q, struct vm_area_struct *vma,
@@ -227,7 +196,7 @@ static int dummy_mmap(struct uacce_queue *q, struct vm_area_struct *vma,
 {
 	struct dummy_hw_queue *hwq = (struct dummy_hw_queue *)q->priv;
 
-	dummy_log("mmap mmio space\n");
+	dev_dbg(&q->uacce->dev, "mmap mmio space\n");
 	if (vma->vm_pgoff != 0 || qfr->nr_pages > 1 ||
 	    !(vma->vm_flags & VM_SHARED))
 		return -EINVAL;
@@ -239,8 +208,9 @@ static int dummy_mmap(struct uacce_queue *q, struct vm_area_struct *vma,
 static int dummy_map(struct uacce_queue *q, struct uacce_qfile_region *qfr)
 {
 	struct dummy_hw_queue *hwq = (struct dummy_hw_queue *)q->priv;
+	struct device *dev = &q->uacce->dev;
 
-	dummy_log("map qfr (%s)\n", uacce_qfrt_str(qfr));
+	dev_dbg(dev, "map qfr (%s)\n", uacce_qfrt_str(qfr));
 
 	switch (qfr->type) {
 	case UACCE_QFRT_SS:
@@ -254,7 +224,7 @@ static int dummy_map(struct uacce_queue *q, struct uacce_qfile_region *qfr)
 		if (!hwq->vmap)
 			return -ENOMEM;
 
-		dummy_log("vmap virutal address to %lx\n",
+		dev_dbg(dev, "vmap virutal address to %lx\n",
 			  (unsigned long)hwq->vmap);
 #endif
 
@@ -264,7 +234,7 @@ static int dummy_map(struct uacce_queue *q, struct uacce_qfile_region *qfr)
 		break;
 
 	default:
-		dev_err(&q->uacce->dev, "map invalid qfr (%s)\n",
+		dev_err(dev, "map invalid qfr (%s)\n",
 			uacce_qfrt_str(qfr));
 		return -EINVAL;
 	}
@@ -278,7 +248,11 @@ static void dummy_unmap(struct uacce_queue *q, struct uacce_qfile_region *qfr)
 
 	switch (qfr->type) {
 	case UACCE_QFRT_SS:
-		BUG_ON(hwq->vmap);
+		BUG_ON(!hwq->vmap);
+		dev_dbg(&hwq->wdq.uacce->dev, "unmap vmap %lx\n",
+			(unsigned long)hwq->vmap);
+		vunmap(hwq->vmap);
+		hwq->vmap = NULL;
 		if (hwq->ss_qfr)
 			hwq->ss_qfr = NULL;
 
@@ -311,13 +285,14 @@ static long dummy_ioctl(struct uacce_queue *q, unsigned int cmd,
 
 static void dummy_mask_notify(struct uacce_queue *q, int event_mask)
 {
-	dummy_log("mask notify: %x\n", event_mask);
+	dev_dbg(&q->uacce->dev, "mask notify: %x\n", event_mask);
 }
 
 int queue_worker(void *data) {
 	struct dummy_hw_queue *hwq = data;
 
 #ifndef TEST_VMAP_IN_MAP
+	struct device *dev = &hwq->wdq.uacce->dev;
 	if (hwq->ss_qfr) {
 		BUG_ON(hwq->vmap);
 
@@ -326,10 +301,10 @@ int queue_worker(void *data) {
 		if (!hwq->vmap)
 			return -ENOMEM;
 
-		dummy_log("vmap virutal address to %lx\n",
+		dev_dbg(dev, "vmap virutal address to %lx\n",
 			  (unsigned long)hwq->vmap);
 	} else {
-		dev_err(hwq->wdq.uacce->pdev, "ss qfr not mapped\n");
+		dev_err(dev, "ss qfr not mapped\n");
 		return -EINVAL;
 	}
 #endif
@@ -352,7 +327,7 @@ static int dummy_start_queue(struct uacce_queue *q)
 	if (PTR_ERR_OR_ZERO(hwq->work_thread))
 		return PTR_ERR(hwq->work_thread);
 
-	dummy_log("queue start\n");
+	dev_dbg(&q->uacce->dev, "queue start\n");
 	return 0;
 }
 
@@ -362,11 +337,22 @@ void dummy_stop_queue(struct uacce_queue *q) {
 	if (hwq->work_thread)
 		kthread_stop(hwq->work_thread);
 
-	if (hwq->vmap) {
-		dummy_log("unmap vmap %lx\n", (unsigned long)hwq->vmap);
-		vunmap(hwq->vmap);
-		hwq->vmap = NULL;
+}
+
+static int dummy_get_available_instances(struct uacce *uacce) {
+	int i, ret;
+	struct dummy_hw *hw = (struct dummy_hw *)uacce->priv;
+	struct dummy_hw_queue *devqs = hw->qs;
+
+	mutex_lock(&qsmutex);
+	for (i = 0, ret = 0; i < MAX_QUEUE; i++) {
+		if (!devqs[i].used) {
+			ret++;
+		}
 	}
+	mutex_unlock(&qsmutex);
+
+	return ret;
 }
 
 static struct uacce_ops dummy_ops = {
@@ -393,6 +379,7 @@ static struct uacce_ops dummy_ops = {
 	.unmap = dummy_unmap,
 	.ioctl = dummy_ioctl,
 	.mask_notify = dummy_mask_notify,
+	.get_available_instances = dummy_get_available_instances,
 };
 
 static int dummy_wd_probe(struct platform_device *pdev)
@@ -414,12 +401,6 @@ static int dummy_wd_probe(struct platform_device *pdev)
 	if (!uacce)
 		return -ENOMEM;
 
-	for (i = 0; i < MAX_QUEUE; i++) {
-		dummy_init_hw_queue(&hw->qs[i], 0, pdev->id, i);
-		hw->qs[i].wdq.uacce = uacce;
-		hw->qs[i].hw = hw;
-	}
-
 	platform_set_drvdata(pdev, uacce);
 	uacce->name = DUMMY_WD;
 	uacce->pdev = &pdev->dev;
@@ -428,13 +409,35 @@ static int dummy_wd_probe(struct platform_device *pdev)
 	uacce->drv_name = DUMMY_WD;
 	uacce->algs = "memcpy\n";
 
+	for (i = 0; i < MAX_QUEUE; i++) {
+		hw->qs[i].wdq.uacce = uacce;
+		hw->qs[i].hw = hw;
+		hw->qs[i].reg = (struct dummy_hw_queue_reg *)
+			__get_free_page(GFP_KERNEL);
+		memcpy(hw->qs[i].reg->hw_tag, DUMMY_HW_TAG, DUMMY_HW_TAG_SZ);
+		hw->qs[i].reg->ring_bd_num = Q_BDS;
+		hw->qs[i].reg->head = 0;
+		hw->qs[i].reg->tail = 0;
+		hw->qs[i].tail = 0;
+		hw->qs[i].is_updated = 0;
+		hw->qs[i].devid = pdev->id;
+		hw->qs[i].qid = i;
+
+		mutex_init(&hw->qs[i].mutex);
+	}
+
 	return uacce_register(uacce);
 }
 
 static int dummy_wd_remove(struct platform_device *pdev)
 {
 	struct uacce *uacce = (struct uacce *)pdev->dev.driver_data;
+	struct dummy_hw *hw = &hws[pdev->id];
+	int i;
+
 	uacce_unregister(uacce);
+	for (i = 0; i < MAX_QUEUE; i++)
+		free_page((unsigned long)hw->qs[i].reg);
 	return 0;
 }
 
