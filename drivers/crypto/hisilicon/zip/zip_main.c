@@ -548,13 +548,13 @@ static void hisi_zip_debugfs_exit(struct hisi_zip *hisi_zip)
 	debugfs_remove_recursive(qm->debug.debug_root);
 }
 
-static int hisi_zip_pf_probe_init(struct device *dev, struct hisi_qm *qm,
-				  struct hisi_zip *hisi_zip)
+static int hisi_zip_pf_probe_init(struct hisi_zip *hisi_zip)
 {
+	struct hisi_qm *qm = &hisi_zip->qm;
 	struct hisi_zip_ctrl *ctrl;
 	u32 nfe_flag;
 
-	ctrl = devm_kzalloc(dev, sizeof(*ctrl), GFP_KERNEL);
+	ctrl = devm_kzalloc(&qm->pdev->dev, sizeof(*ctrl), GFP_KERNEL);
 	if (!ctrl)
 		return -ENOMEM;
 
@@ -637,7 +637,7 @@ static int hisi_zip_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 	}
 
 	if (qm->fun_type == QM_HW_PF) {
-		ret = hisi_zip_pf_probe_init(&pdev->dev, qm, hisi_zip);
+		ret = hisi_zip_pf_probe_init(hisi_zip);
 		if (ret)
 			goto err_remove_from_list;
 
