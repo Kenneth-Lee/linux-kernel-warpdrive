@@ -204,6 +204,9 @@ static int pf_q_num_set(const char *val, const struct kernel_param *kp)
 	u8 rev_id;
 	int ret;
 
+	if (!val)
+		return -EINVAL;
+
 	if (unlikely(!pdev)) {
 		q_num = min_t(u32, HZIP_QUEUE_NUM_V1, HZIP_QUEUE_NUM_V2);
 		pr_info("No device found currently, suppose queue number is %d\n",
