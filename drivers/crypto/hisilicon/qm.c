@@ -171,7 +171,6 @@ enum vft_type {
 };
 
 struct hisi_qm_hw_ops {
-	int (*set_vft)(struct hisi_qm *qm, u32 fun_num, u32 base, u32 number);
 	int (*get_vft)(struct hisi_qm *qm, u32 *base, u32 *number);
 	void (*qm_db)(struct hisi_qm *qm, u16 qn,
 		      u8 cmd, u16 index, u8 priority);
@@ -955,14 +954,12 @@ static pci_ers_result_t qm_hw_error_handle_v2(struct hisi_qm *qm)
 }
 
 static const struct hisi_qm_hw_ops qm_hw_ops_v1 = {
-	.set_vft = qm_set_sqc_cqc_vft,
 	.qm_db = qm_db_v1,
 	.get_irq_num = qm_get_irq_num_v1,
 	.hw_error_init = qm_hw_error_init_v1,
 };
 
 static const struct hisi_qm_hw_ops qm_hw_ops_v2 = {
-	.set_vft = qm_set_sqc_cqc_vft,
 	.get_vft = qm_get_vft_v2,
 	.qm_db = qm_db_v2,
 	.get_irq_num = qm_get_irq_num_v2,
@@ -1676,6 +1673,54 @@ void hisi_qm_uninit(struct hisi_qm *qm)
 }
 EXPORT_SYMBOL_GPL(hisi_qm_uninit);
 
+/**
+ * hisi_qm_get_vft() - Get vft from a qm.
+ * @qm: The qm we want to get its vft.
+ * @base: The base number of queue in vft.
+ * @number: The number of queues in vft.
+ *
+ * We can allocate multiple queues to a qm by configuring virtual function
+ * table. We get related configures by this function. Normally, we call this
+ * function in VF driver to get the queue information.
+ *
+ * qm hw v1 does not support this interface.
+ */
+int hisi_qm_get_vft(struct hisi_qm *qm, u32 *base, u32 *number)
+{
+	if (!base || !number)
+		return -EINVAL;
+
+	if (!qm->ops->get_vft) {
+		dev_err(&qm->pdev->dev, "Don't support vft read!\n");
+		return -EINVAL;
+	}
+
+	return qm->ops->get_vft(qm, base, number);
+}
+EXPORT_SYMBOL_GPL(hisi_qm_get_vft);
+
+/**
+ * hisi_qm_set_vft() - Set "virtual function table" for a qm.
+ * @fun_num: Number of operated function.
+ * @qm: The qm in which to set vft, alway in a PF.
+ * @base: The base number of queue in vft.
+ * @number: The number of queues in vft.
+ *
+ * This function is alway called in PF driver, it is used to assign queues
+ * among PF and VFs.
+ *
+ * Assign queues A~B to PF: hisi_qm_set_vft(qm, 0, A, B - A + 1)
+ * Assign queues A~B to VF: hisi_qm_set_vft(qm, 2, A, B - A + 1)
+ * (VF function number 0x2)
+ */
+int hisi_qm_set_vft(struct hisi_qm *qm, u32 fun_num, u32 base,
+		    u32 number)
+{
+	return qm_set_sqc_cqc_vft(qm, fun_num, base, number);
+}
+
+EXPORT_SYMBOL_GPL(hisi_qm_set_vft);
+
 static int __hisi_qm_start(struct hisi_qm *qm)
 {
 	struct pci_dev *pdev = qm->pdev;
@@ -1701,10 +1746,7 @@ static int __hisi_qm_start(struct hisi_qm *qm)
 		return -EINVAL;
 
 	if (qm->fun_type == QM_HW_PF) {
-		if (!qm->ops->set_vft)
-			return -EPERM;
-
-		ret = qm->ops->set_vft(qm, 0, qm->qp_base, qm->qp_num);
+		ret = hisi_qm_set_vft(qm, 0, qm->qp_base, qm->qp_num);
 		if (ret)
 			return ret;
 	}
@@ -1901,10 +1943,7 @@ int hisi_qm_stop(struct hisi_qm *qm)
 	}
 
 	if (qm->fun_type == QM_HW_PF) {
-		if (!qm->ops->set_vft)
-			return -EPERM;
-
-		ret = qm->ops->set_vft(qm, 0, 0, 0);
+		ret = hisi_qm_set_vft(qm, 0, 0, 0);
 		if (ret) {
 			dev_err(dev, "Failed to set vft!\n");
 			return -EBUSY;
@@ -1919,56 +1958,6 @@ int hisi_qm_stop(struct hisi_qm *qm)
 	return 0;
 }
 EXPORT_SYMBOL_GPL(hisi_qm_stop);
-
-/**
- * hisi_qm_get_vft() - Get vft from a qm.
- * @qm: The qm we want to get its vft.
- * @base: The base number of queue in vft.
- * @number: The number of queues in vft.
- *
- * We can allocate multiple queues to a qm by configuring virtual function
- * table. We get related configures by this function. Normally, we call this
- * function in VF driver to get the queue information.
- *
- * qm hw v1 does not support this interface.
- */
-int hisi_qm_get_vft(struct hisi_qm *qm, u32 *base, u32 *number)
-{
-	if (!base || !number)
-		return -EINVAL;
-
-	if (!qm->ops->get_vft) {
-		dev_err(&qm->pdev->dev, "Don't support vft read!\n");
-		return -EINVAL;
-	}
-
-	return qm->ops->get_vft(qm, base, number);
-}
-EXPORT_SYMBOL_GPL(hisi_qm_get_vft);
-
-/**
- * hisi_qm_set_vft() - Set "virtual function table" for a qm.
- * @fun_num: Number of operated function.
- * @qm: The qm in which to set vft, alway in a PF.
- * @base: The base number of queue in vft.
- * @number: The number of queues in vft.
- *
- * This function is alway called in PF driver, it is used to assign queues
- * among PF and VFs.
- *
- * Assign queues A~B to PF: hisi_qm_set_vft(qm, 0, A, B - A + 1)
- * Assign queues A~B to VF: hisi_qm_set_vft(qm, 2, A, B - A + 1)
- * (VF function number 0x2)
- */
-int hisi_qm_set_vft(struct hisi_qm *qm, u32 fun_num, u32 base,
-		    u32 number)
-{
-	if (!qm->ops->set_vft)
-		return -EPERM;
-
-	return qm->ops->set_vft(qm, fun_num, base, number);
-}
-EXPORT_SYMBOL_GPL(hisi_qm_set_vft);
 
 /**
  * hisi_qm_debug_init() - Initialize qm related debugfs files.
