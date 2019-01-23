@@ -195,12 +195,12 @@ struct hisi_qm {
 	struct qm_eqe *eqe;
 	struct qm_aeqc *aeqc;
 	struct qm_aeqe *aeqe;
-	unsigned long sqc_dma,
-		      cqc_dma,
-		      eqc_dma,
-		      eqe_dma,
-		      aeqc_dma,
-		      aeqe_dma;
+	dma_addr_t sqc_dma;
+	dma_addr_t cqc_dma;
+	dma_addr_t eqc_dma;
+	dma_addr_t eqe_dma;
+	dma_addr_t aeqc_dma;
+	dma_addr_t aeqe_dma;
 
 	u32 eq_head;
 	u32 aeq_head;
@@ -252,11 +252,10 @@ struct hisi_qp {
 	struct qm_cqc *cqc;
 	void *sqe;
 	struct qm_cqe *cqe;
-
-	unsigned long sqc_dma,
-		      cqc_dma,
-		      sqe_dma,
-		      cqe_dma;
+	dma_addr_t sqc_dma;
+	dma_addr_t cqc_dma;
+	dma_addr_t sqe_dma;
+	dma_addr_t cqe_dma;
 
 	struct hisi_qp_status qp_status;
 	struct completion completion;
