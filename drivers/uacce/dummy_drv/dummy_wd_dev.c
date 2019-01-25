@@ -409,6 +409,21 @@ static int dummy_wd_probe(struct platform_device *pdev)
 	uacce->drv_name = DUMMY_WD;
 	uacce->algs = "memcpy\n";
 
+#ifdef CONFIG_NUMA
+	/*
+	 * Emulate numa id if there's no platform dummy device.
+	 * Try to bind each dummy device to each numa node. If there're more
+	 * dummy devices than numa nodes, the numa_node should be binded to
+	 * the last numa node.
+	 */
+	if (uacce->pdev->numa_node < 0) {
+		if (cpu_to_node(nr_cpu_ids - 1) > pdev->id)
+			uacce->pdev->numa_node = pdev->id;
+		else
+			uacce->pdev->numa_node = cpu_to_node(nr_cpu_ids - 1);
+	}
+#endif
+
 	for (i = 0; i < MAX_QUEUE; i++) {
 		hw->qs[i].wdq.uacce = uacce;
 		hw->qs[i].hw = hw;
