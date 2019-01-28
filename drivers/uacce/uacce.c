@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 #include <linux/compat.h>
 #include <linux/dma-iommu.h>
+#include <linux/dma-mapping.h>
 #include <linux/file.h>
 #include <linux/idr.h>
 #include <linux/irqdomain.h>
@@ -187,29 +188,16 @@ static const struct vm_operations_struct uacce_shm_vm_ops = {
 static int uacce_qfr_alloc_pages(struct uacce_qfile_region *qfr)
 {
 	int gfp_mask = GFP_ATOMIC | __GFP_ZERO;
-	int i, j, order;
-
-	if (unlikely(qfr->flags & UACCE_QFRF_CONT_PAGE)) {
-		order = get_order(qfr->nr_pages << PAGE_SHIFT);
-		pr_debug("get 2^%d pages for %d\n", order, qfr->nr_pages);
-		qfr->cont_pages = alloc_pages(gfp_mask, order);
-		if (!qfr->cont_pages)
-			return -ENOMEM;
-	}
+	int i, j;
 
 	qfr->pages = kcalloc(qfr->nr_pages, sizeof(*qfr->pages), gfp_mask);
 	if (!qfr->pages)
-		goto err_with_cont_pages;
+		return -ENOMEM;
 
 	for (i = 0; i < qfr->nr_pages; i++) {
-		if (unlikely(qfr->flags & UACCE_QFRF_CONT_PAGE)) {
-			qfr->pages[i] = &qfr->cont_pages[i];
-			get_page(qfr->pages[i]);
-		} else {
-			qfr->pages[i] = alloc_page(gfp_mask);
-			if (!qfr->pages[i])
-				goto err_with_pages;
-		}
+		qfr->pages[i] = alloc_page(gfp_mask);
+		if (!qfr->pages[i])
+			goto err_with_pages;
 	}
 
 	return 0;
@@ -219,11 +207,6 @@ err_with_pages:
 		put_page(qfr->pages[j]);
 
 	kfree(qfr->pages);
-
-err_with_cont_pages:
-	if (unlikely(qfr->flags & UACCE_QFRF_CONT_PAGE))
-		__free_pages(qfr->cont_pages,
-			     get_order(qfr->nr_pages >> PAGE_SHIFT));
 	return -ENOMEM;
 }
 
@@ -231,12 +214,8 @@ static void uacce_qfr_free_pages(struct uacce_qfile_region *qfr)
 {
 	int i;
 
-	if (unlikely(qfr->flags & UACCE_QFRF_CONT_PAGE))
-		__free_pages(qfr->cont_pages,
-			     get_order(qfr->nr_pages << PAGE_SHIFT));
-	else
-		for (i = 0; i < qfr->nr_pages; i++)
-			put_page(qfr->pages[i]);
+	for (i = 0; i < qfr->nr_pages; i++)
+		put_page(qfr->pages[i]);
 
 	kfree(qfr->pages);
 }
@@ -270,6 +249,7 @@ static struct uacce_qfile_region *uacce_create_region(struct uacce_queue *q,
 {
 	struct uacce_qfile_region *qfr;
 	struct uacce *uacce = q->uacce;
+	unsigned long vm_pgoff;
 	int ret = -ENOMEM;
 
 	qfr = kzalloc(sizeof(*qfr), GFP_ATOMIC);
@@ -294,16 +274,41 @@ static struct uacce_qfile_region *uacce_create_region(struct uacce_queue *q,
 		return qfr;
 	}
 
-	ret = uacce_qfr_alloc_pages(qfr);
-	if (ret)
-		goto err_with_qfr;
+	if (uacce->ops->flags & UACCE_DEV_NOIOMMU) {
+		/* NOIOMMU use continue dma memory only */
+		qfr->kaddr = dma_alloc_coherent(uacce->pdev,
+			qfr->nr_pages << PAGE_SHIFT,
+			&qfr->dma, GFP_KERNEL);
+		if (!qfr->kaddr) {
+			goto err_with_qfr;
+			ret = -ENOMEM;
+		}
+	} else {
+		ret = uacce_qfr_alloc_pages(qfr);
+		if (ret)
+			goto err_with_qfr;
+	}
 
+	/* map to device */
 	ret = uacce_queue_map_qfr(q, qfr);
 	if (ret)
 		goto err_with_pages;
 
+	/* mmap to user space */
 	if (flags & UACCE_QFRF_MMAP) {
-		ret = uacce_queue_mmap_qfr(q, qfr, vma);
+		if (uacce->ops->flags & UACCE_DEV_NOIOMMU) {
+			/* dma_mmap_coherent() requires vm_pgoff as 0
+			 * restore vm_pfoff to initial value for mmap()
+			 */
+			vm_pgoff = vma->vm_pgoff;
+			vma->vm_pgoff = 0;
+			ret = dma_mmap_coherent(uacce->pdev, vma, qfr->kaddr,
+						qfr->dma,
+						qfr->nr_pages << PAGE_SHIFT);
+			vma->vm_pgoff = vm_pgoff;
+		} else
+			ret = uacce_queue_mmap_qfr(q, qfr, vma);
+
 		if (ret)
 			goto err_with_mapped_qfr;
 	}
@@ -313,7 +318,11 @@ static struct uacce_qfile_region *uacce_create_region(struct uacce_queue *q,
 err_with_mapped_qfr:
 	uacce_queue_unmap_qfr(q, qfr);
 err_with_pages:
-	uacce_qfr_free_pages(qfr);
+	if (uacce->ops->flags & UACCE_DEV_NOIOMMU)
+		dma_free_coherent(uacce->pdev, qfr->nr_pages << PAGE_SHIFT,
+				  qfr->kaddr, qfr->dma);
+	else
+		uacce_qfr_free_pages(qfr);
 err_with_qfr:
 	kfree(qfr);
 
@@ -419,26 +428,24 @@ err_with_vmap:
 	return ret;
 }
 
-static long uacce_get_ss_pa(struct uacce_queue *q, void __user *arg)
+static long uacce_get_ss_dma(struct uacce_queue *q, void __user *arg)
 {
 	struct uacce *uacce = q->uacce;
 	long ret = 0;
-	unsigned long pa = 0;
+	unsigned long dma = 0;
 
-	if (!(uacce->ops->flags & UACCE_DEV_CONT_PAGE))
+	if (!(uacce->ops->flags & UACCE_DEV_NOIOMMU))
 		return -EINVAL;
 
 	uacce_qs_wlock();
 	if (q->qfrs[UACCE_QFRT_SS]) {
-		WARN_ON(!q->qfrs[UACCE_QFRT_SS]->cont_pages);
-		pa = page_to_phys(q->qfrs[UACCE_QFRT_SS]->cont_pages);
-
-		dev_dbg(&uacce->dev, "uacce_get_ss_pa(%lx)\n", pa);
+		dma = (unsigned long)(q->qfrs[UACCE_QFRT_SS]->dma);
+		dev_dbg(&uacce->dev, "uacce_get_ss_dma(%lx)\n", dma);
 	} else
 		ret = -EINVAL;
 	uacce_qs_wunlock();
 
-	if (copy_to_user(arg, &pa, sizeof(pa)))
+	if (copy_to_user(arg, &dma, sizeof(dma)))
 		ret = -EFAULT;
 
 	return ret;
@@ -457,8 +464,8 @@ static long uacce_fops_unl_ioctl(struct file *filep,
 	case UACCE_CMD_START:
 		return uacce_start_queue(q);
 
-	case UACCE_CMD_GET_SS_PA:
-		return uacce_get_ss_pa(q, (void __user *)arg);
+	case UACCE_CMD_GET_SS_DMA:
+		return uacce_get_ss_dma(q, (void __user *)arg);
 
 	default:
 		if (uacce->ops->ioctl)
@@ -542,6 +549,7 @@ static int uacce_fops_open(struct inode *inode, struct file *filep)
 static int uacce_fops_release(struct inode *inode, struct file *filep)
 {
 	struct uacce_queue *q = (struct uacce_queue *)filep->private_data;
+	struct uacce_qfile_region *qfr;
 	struct uacce *uacce;
 	int i;
 	bool is_to_free_region;
@@ -556,23 +564,36 @@ static int uacce_fops_release(struct inode *inode, struct file *filep)
 	uacce_qs_wlock();
 
 	for (i = 0; i < UACCE_QFRT_MAX; i++) {
-		is_to_free_region = false;
-		if (q->qfrs[i] && !(q->qfrs[i]->flags & UACCE_QFRF_SELFMT)) {
-			uacce_queue_unmap_qfr(q, q->qfrs[i]);
-			if (i == UACCE_QFRT_SS) {
-				list_del(&q->list);
-				if (list_empty(&q->qfrs[i]->qs))
+		qfr = q->qfrs[i];
+		if (!qfr)
+			continue;
+
+		if (uacce->ops->flags & UACCE_DEV_NOIOMMU) {
+			if (qfr->dma)
+				dma_free_coherent(uacce->pdev,
+						  qfr->nr_pages << PAGE_SHIFT,
+						  qfr->kaddr, qfr->dma);
+			kfree(qfr);
+
+		} else {
+			is_to_free_region = false;
+			if (!(qfr->flags & UACCE_QFRF_SELFMT)) {
+				uacce_queue_unmap_qfr(q, qfr);
+				if (i == UACCE_QFRT_SS) {
+					list_del(&q->list);
+					if (list_empty(&qfr->qs))
+						is_to_free_region = true;
+				} else
 					is_to_free_region = true;
-			} else
-				is_to_free_region = true;
+			}
+
+			if (is_to_free_region) {
+				free_pages += qfr->nr_pages;
+				uacce_destroy_region(qfr);
+			}
 		}
 
-		if (is_to_free_region) {
-			free_pages += q->qfrs[i]->nr_pages;
-			uacce_destroy_region(q->qfrs[i]);
-		}
-
-		q->qfrs[i] = NULL;
+		qfr = NULL;
 	}
 
 	uacce_qs_wunlock();
@@ -675,7 +696,7 @@ static int uacce_fops_mmap(struct file *filep, struct vm_area_struct *vma)
 	struct uacce *uacce = q->uacce;
 	enum uacce_qfrt type = uacce_get_region_type(uacce, vma);
 	struct uacce_qfile_region *qfr;
-	int flags, ret;
+	int flags = 0, ret;
 
 	dev_dbg(&uacce->dev, "mmap q file(t=%s, off=%lx, start=%lx, end=%lx)\n",
 		 qfrt_str[type], vma->vm_pgoff, vma->vm_start, vma->vm_end);
@@ -719,7 +740,8 @@ static int uacce_fops_mmap(struct file *filep, struct vm_area_struct *vma)
 		break;
 
 	case UACCE_QFRT_DUS:
-		if(q->uacce->ops->flags & UACCE_DEV_DRVMAP_DUS) {
+		if((q->uacce->ops->flags & UACCE_DEV_DRVMAP_DUS) ||
+			(q->uacce->ops->flags & UACCE_DEV_NOIOMMU)) {
 			flags = UACCE_QFRF_SELFMT;
 			break;
 		}
@@ -733,9 +755,6 @@ static int uacce_fops_mmap(struct file *filep, struct vm_area_struct *vma)
 		WARN_ON(&uacce->dev);
 		break;
 	}
-
-	if (uacce->ops->flags & UACCE_DEV_CONT_PAGE)
-		flags |= UACCE_QFRF_CONT_PAGE;
 
 	qfr = uacce_create_region(q, vma, type, flags);
 	if (IS_ERR(qfr)) {

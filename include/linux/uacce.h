@@ -30,15 +30,13 @@ enum uacce_qfrt {
 struct uacce_qfile_region {
 	enum uacce_qfrt type;
 	unsigned long iova;
-	struct page *cont_pages;
 	struct page **pages;
 	int nr_pages;
 	unsigned long prot;
 	int flags;
-	union {
-		struct list_head qs; /* qs sharing the same region, for ss */
-		void *kaddr; /* kernel addr, for dko */
-	};
+	struct list_head qs;	/* qs sharing the same region, for ss */
+	void *kaddr;		/* kernel addr, for dko */
+	dma_addr_t dma;		/* dma address, if created by dma api */
 };
 
 /**

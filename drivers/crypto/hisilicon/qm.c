@@ -129,9 +129,6 @@
 #define QM_CACHE_WB_START		0x204
 #define QM_CACHE_WB_DONE		0x208
 
-/* directly use physical memory for DMA */
-#define USE_PHY_IN_NOIOMMU_MODE 1
-
 #define QM_MK_CQC_DW3_V1(hop_num, pg_sz, buf_sz, sqe_sz) \
 	(((hop_num) << QM_CQ_HOP_NUM_SHIFT)	| \
 	((pg_sz) << QM_CQ_PAGE_SIZE_SHIFT)	| \
@@ -1192,7 +1189,7 @@ int hisi_qm_stop_qp(struct hisi_qp *qp)
 
 	set_bit(QP_STOP, &qp->qp_status.flags);
 
-	dev_warn(dev, "stop queue %u!", qp->qp_id);
+	dev_dbg(dev, "stop queue %u!", qp->qp_id);
 
 	return 0;
 }
@@ -1349,6 +1346,8 @@ static int hisi_qm_uacce_mmap(struct uacce_queue *q,
 	size_t sz = vma->vm_end - vma->vm_start;
 	struct pci_dev *pdev = qm->pdev;
 	struct device *dev = &pdev->dev;
+	unsigned long vm_pgoff;
+	int ret;
 
 	switch (qfr->type) {
 	case UACCE_QFRT_MMIO:
@@ -1368,9 +1367,15 @@ static int hisi_qm_uacce_mmap(struct uacce_queue *q,
 					 sz, qp->qdma.size);
 				return -EINVAL;
 			}
-			return remap_pfn_range(vma, vma->vm_start,
-				qp->qdma.dma >> PAGE_SHIFT, sz,
-				vma->vm_page_prot);
+
+			/* dma_mmap_coherent() requires vm_pgoff as 0
+			 * restore vm_pfoff to initial value for mmap()
+			 */
+			vm_pgoff = vma->vm_pgoff;
+			vma->vm_pgoff = 0;
+			ret = dma_mmap_coherent(dev, vma, qp->qdma.va, qp->qdma.dma, sz);
+			vma->vm_pgoff = vm_pgoff;
+			return ret;
 		}
 		return -EINVAL;
 
@@ -1434,23 +1439,7 @@ static void hisi_qm_uacce_stop_queue(struct uacce_queue *q)
 static int hisi_qm_uacce_map(struct uacce_queue *q,
 			     struct uacce_qfile_region *qfr)
 {
-	struct hisi_qp *qp = (struct hisi_qp *)q->priv;
-	struct device *dev = &q->uacce->dev;
-
-	if (qfr->type == UACCE_QFRT_DUS) {
-		if (!qfr->cont_pages) {
-			dev_err(dev, "noiommu mode need continue pages only\n");
-			return -EINVAL;
-		}
-
-		qp->qdma.dma = page_to_phys(qfr->cont_pages);
-		qp->qdma.va = qfr->kaddr; /* it can be 0 */
-		qp->qdma.size = qfr->nr_pages >> PAGE_SHIFT;
-
-		dev_dbg(dev, "hisi_qm_uacce_map dus dma=0x%lx, %d pages\n",
-			(unsigned long)qp->qdma.dma, qfr->nr_pages);
-
-	}
+	/* todo */
 	return 0;
 }
 
@@ -1520,9 +1509,6 @@ static int qm_register_uacce(struct hisi_qm *qm)
 
 	if (qm->use_dma_api) {
 		uacce->ops->flags = UACCE_DEV_NOIOMMU;
-#if USE_PHY_IN_NOIOMMU_MODE
-		uacce->ops->flags |= UACCE_DEV_CONT_PAGE;
-#endif
 		uacce->ops->api_ver = HISI_QM_API_VER_BASE
 				      UACCE_API_VER_NOIOMMU_SUBFIX;
 		uacce->ops->qf_pg_start[UACCE_QFRT_MMIO] = 0;
@@ -1672,10 +1658,6 @@ void hisi_qm_uninit(struct hisi_qm *qm)
 
 	if (qm->qdma.va)
 		with_dma_mem = 1;
-
-#if USE_PHY_IN_NOIOMMU_MODE
-	with_dma_mem = 0;
-#endif
 
 	if (with_dma_mem) {
 		hisi_qm_cache_wb(qm);
