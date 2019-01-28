@@ -7,6 +7,7 @@
  * queue by the user application.
  */
 
+#include <linux/dma-mapping.h>
 #include <linux/module.h>
 #include <linux/printk.h>
 #include <linux/slab.h>
@@ -386,12 +387,17 @@ static int dummy_wd_probe(struct platform_device *pdev)
 {
 	struct uacce *uacce;
 	struct dummy_hw *hw;
-	int i;
+	int i, ret;
 
 	if (pdev->id >= MAX_DEV) {
 		dev_err(&pdev->dev, "invalid id (%d) for dummy_wd\n", pdev->id);
 		return -EINVAL;
 	}
+
+	pdev->dev.dma_ops = &dma_direct_ops;
+	ret = dma_set_coherent_mask(&pdev->dev, DMA_BIT_MASK(64));
+	if (ret < 0)
+		return -EINVAL;
 
 	hw = &hws[pdev->id];
 	hw->aflags = 0;
