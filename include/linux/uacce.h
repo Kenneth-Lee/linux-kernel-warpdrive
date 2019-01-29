@@ -19,7 +19,7 @@ struct uacce;
 
 struct uacce_qfile_region {
 	enum uacce_qfrt type;
-	unsigned long iova;
+	unsigned long iova;	/* iova share between user and device space */
 	struct page **pages;
 	int nr_pages;
 	unsigned long prot;
@@ -38,8 +38,6 @@ struct uacce_qfile_region {
  * @is_q_updated: check whether the task is finished
  * @mask_notify: mask the task irq of queue
  * @mmap: mmap addresses of queue to user space
- * @map: map queue to device (for NOIOMMU device)
- * @unmap: unmap queue to device (for NOIOMMU device)
  * @reset: reset the WD device
  * @reset_queue: reset the queue
  * @ioctl:   ioctl for user space users of the queue
@@ -60,8 +58,6 @@ struct uacce_ops {
 	void (*mask_notify)(struct uacce_queue *q, int event_mask);
 	int (*mmap)(struct uacce_queue *q, struct vm_area_struct *vma, 
 		    struct uacce_qfile_region *qfr);
-	int (*map)(struct uacce_queue *q, struct uacce_qfile_region *qfr);
-	void (*unmap)(struct uacce_queue *q, struct uacce_qfile_region *qfr);
 	int (*reset)(struct uacce *uacce);
 	int (*reset_queue)(struct uacce_queue *q);
 	long (*ioctl)(struct uacce_queue *q, unsigned int cmd,
