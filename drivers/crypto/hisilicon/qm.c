@@ -161,6 +161,8 @@
 	(qc)->rsvd1 = 0;			\
 } while (0)
 
+#define QMC_ALIGN(sz) ALIGN(sz, 32)
+
 enum vft_type {
 	SQC_VFT = 0,
 	CQC_VFT,
@@ -1262,7 +1264,8 @@ static void hisi_qm_cache_wb(struct hisi_qm *qm)
 		writel(0x1, qm->io_base + QM_CACHE_WB_START);
 		if (readl_relaxed_poll_timeout(qm->io_base + QM_CACHE_WB_DONE,
 					       val, val & BIT(0), 10, 1000))
-			dev_err(&qm->pdev->dev, "QM writeback sqc cache fail!\n");
+			dev_err(&qm->pdev->dev,
+				"QM writeback sqc cache fail!\n");
 	}
 }
 
@@ -1373,7 +1376,8 @@ static int hisi_qm_uacce_mmap(struct uacce_queue *q,
 			 */
 			vm_pgoff = vma->vm_pgoff;
 			vma->vm_pgoff = 0;
-			ret = dma_mmap_coherent(dev, vma, qp->qdma.va, qp->qdma.dma, sz);
+			ret = dma_mmap_coherent(dev, vma, qp->qdma.va,
+						qp->qdma.dma, sz);
 			vma->vm_pgoff = vm_pgoff;
 			return ret;
 		}
@@ -1436,13 +1440,6 @@ static void hisi_qm_uacce_stop_queue(struct uacce_queue *q)
 	}
 }
 
-static int hisi_qm_uacce_map(struct uacce_queue *q,
-			     struct uacce_qfile_region *qfr)
-{
-	/* todo */
-	return 0;
-}
-
 static int qm_set_sqctype(struct uacce_queue *q, u16 type)
 {
 	struct hisi_qm *qm = q->uacce->priv;
@@ -1498,6 +1495,7 @@ static int qm_register_uacce(struct hisi_qm *qm)
 {
 	struct pci_dev *pdev = qm->pdev;
 	struct uacce *uacce = &qm->uacce;
+	int i;
 
 	uacce->name = dev_name(&pdev->dev);
 	uacce->drv_name = pdev->driver->name;
@@ -1511,31 +1509,20 @@ static int qm_register_uacce(struct hisi_qm *qm)
 		uacce->ops->flags = UACCE_DEV_NOIOMMU;
 		uacce->ops->api_ver = HISI_QM_API_VER_BASE
 				      UACCE_API_VER_NOIOMMU_SUBFIX;
-		uacce->ops->qf_pg_start[UACCE_QFRT_MMIO] = 0;
-		uacce->ops->qf_pg_start[UACCE_QFRT_DKO]  = UACCE_QFR_NA;
-		uacce->ops->qf_pg_start[UACCE_QFRT_DUS]  = QM_DOORBELL_PAGE_NR;
-		uacce->ops->qf_pg_start[UACCE_QFRT_SS]   = QM_DOORBELL_PAGE_NR +
-							   QM_DUS_PAGE_NR;
-		uacce->ops->map = hisi_qm_uacce_map;
 	} else {
 #ifdef CONFIG_IOMMU_SVA
 		uacce->ops->flags = UACCE_DEV_SVA | UACCE_DEV_KMAP_DUS;
 #endif
 		uacce->ops->api_ver = HISI_QM_API_VER_BASE;
-		uacce->ops->qf_pg_start[UACCE_QFRT_MMIO] = 0;
-		uacce->ops->qf_pg_start[UACCE_QFRT_DKO]  = QM_DOORBELL_PAGE_NR;
-		uacce->ops->qf_pg_start[UACCE_QFRT_DUS]  = QM_DOORBELL_PAGE_NR +
-							   QM_DKO_PAGE_NR;
-		uacce->ops->qf_pg_start[UACCE_QFRT_SS]   = QM_DOORBELL_PAGE_NR +
-							   QM_DKO_PAGE_NR +
-							   QM_DUS_PAGE_NR;
 	}
+
+	for (i = 0; i < UACCE_QFRT_MAX; i++)
+		uacce->ops->qf_pg_start[i] = UACCE_QFR_NA;
+
 
 	return uacce_register(uacce);
 }
 #endif
-
-#define QMC_ALIGN(sz) ALIGN(sz, 32)
 
 /**
  * hisi_qm_init() - Initialize configures about qm.
@@ -1687,6 +1674,9 @@ int __hisi_qm_start(struct hisi_qm *qm)
 	struct qm_aeqc *aeqc;
 	int ret;
 	size_t off = 0;
+#ifdef CONFIG_CRYPTO_QM_UACCE
+	size_t dko_size;
+#endif
 
 #define QM_INIT_BUF(qm, type, num) do { \
 	(qm)->type = (struct qm_##type *)((void *)(qm)->qdma.va + (off)); \
@@ -1736,9 +1726,15 @@ int __hisi_qm_start(struct hisi_qm *qm)
 #ifdef CONFIG_CRYPTO_QM_UACCE
 	/* check if the size exceed the DKO boundary */
 	if (qm->use_uacce) {
-		dev_dbg(&qm->pdev->dev, "kernel-only buffer used (0x%lx/0x%x)\n",
-			off, QM_DKO_PAGE_NR << PAGE_SHIFT);
-		if (off > (QM_DKO_PAGE_NR << PAGE_SHIFT))
+		WARN_ON(qm->uacce.ops->qf_pg_start[UACCE_QFRT_DKO] == 
+		    UACCE_QFR_NA);
+		dko_size = qm->uacce.ops->qf_pg_start[UACCE_QFRT_DUS] -
+			   qm->uacce.ops->qf_pg_start[UACCE_QFRT_DKO];
+		dko_size <<= PAGE_SHIFT;
+		dev_dbg(&qm->pdev->dev,
+			"kernel-only buffer used (0x%lx/0x%lx)\n", off,
+			dko_size);
+		if (off > dko_size)
 			return -EINVAL;
 	}
 #endif
@@ -1784,11 +1780,43 @@ EXPORT_SYMBOL_GPL(__hisi_qm_start);
 int hisi_qm_start(struct hisi_qm *qm)
 {
 	struct device *dev = &qm->pdev->dev;
+#ifdef CONFIG_CRYPTO_QM_UACCE
+	struct uacce_ops *ops = qm->uacce.ops;
+	unsigned long dus_page_nr = (PAGE_SIZE - 1 +
+		qm->sqe_size * QM_Q_DEPTH + sizeof(struct cqe) * QM_Q_DEPTH)
+		>> PAGE_SHIFT;
+	unsigned long dko_page_nr = (PAGE_SIZE - 1 +
+		QMC_ALIGN(sizeof(struct qm_eqe) * QM_Q_DEPTH) +
+		QMC_ALIGN(sizeof(struct qm_aeqe) * QM_Q_DEPTH) +
+		QMC_ALIGN(sizeof(struct qm_sqc) * qm->qp_num) +
+		QMC_ALIGN(sizeof(struct qm_cqc) * qm->qp_num) +
+		QMC_ALIGN(sizeof(struct qm_eqc)) +
+		QMC_ALIGN(sizeof(struct qm_aeqc))) >> PAGE_SHIFT;
+#endif
 
 	dev_dbg(dev, "qm start with %d qs\n", qm->qp_num);
 
 	if (!qm->qp_num)
 		return -EINVAL;
+
+	/* reset qfr definition */
+#ifdef CONFIG_CRYPTO_QM_UACCE
+	if (qm->use_dma_api) {
+		ops->qf_pg_start[UACCE_QFRT_MMIO] = 0;
+		ops->qf_pg_start[UACCE_QFRT_DKO]  = UACCE_QFR_NA;
+		ops->qf_pg_start[UACCE_QFRT_DUS]  = QM_DOORBELL_PAGE_NR;
+		ops->qf_pg_start[UACCE_QFRT_SS]   = QM_DOORBELL_PAGE_NR +
+						    dus_page_nr;
+	} else {
+		ops->qf_pg_start[UACCE_QFRT_MMIO] = 0;
+		ops->qf_pg_start[UACCE_QFRT_DKO]  = QM_DOORBELL_PAGE_NR;
+		ops->qf_pg_start[UACCE_QFRT_DUS]  = QM_DOORBELL_PAGE_NR +
+		 				    dko_page_nr;
+		ops->qf_pg_start[UACCE_QFRT_SS]   = QM_DOORBELL_PAGE_NR +
+						    dko_page_nr +
+						    dus_page_nr;
+	}
+#endif
 
 	if (!qm->qp_bitmap) {
 		qm->qp_bitmap = devm_kcalloc(dev, BITS_TO_LONGS(qm->qp_num),
@@ -1997,7 +2025,8 @@ void hisi_qm_hw_error_init(struct hisi_qm *qm, u32 ce, u32 nfe, u32 fe,
 			   u32 msi)
 {
 	if (!qm->ops->hw_error_init) {
-		dev_err(&qm->pdev->dev, "QM version %d doesn't support hw error handling!\n",
+		dev_err(&qm->pdev->dev,
+			"QM version %d doesn't support hw error handling!\n",
 			qm->ver);
 		return;
 	}
@@ -2015,7 +2044,8 @@ EXPORT_SYMBOL_GPL(hisi_qm_hw_error_init);
 int hisi_qm_hw_error_handle(struct hisi_qm *qm)
 {
 	if (!qm->ops->hw_error_handle) {
-		dev_err(&qm->pdev->dev, "QM version %d doesn't support hw error report!\n",
+		dev_err(&qm->pdev->dev,
+			"QM version %d doesn't support hw error report!\n",
 			qm->ver);
 		return PCI_ERS_RESULT_NONE;
 	}
