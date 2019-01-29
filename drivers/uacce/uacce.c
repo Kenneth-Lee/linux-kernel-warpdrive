@@ -881,6 +881,22 @@ static ssize_t uacce_dev_show_algorithms(struct device *dev,
 }
 static DEVICE_ATTR(algorithms, S_IRUGO, uacce_dev_show_algorithms, NULL);
 
+static ssize_t uacce_dev_show_qfrs_pg_start(struct device *dev,
+					    struct device_attribute *attr,
+					    char *buf)
+{
+	struct uacce *uacce = UACCE_FROM_CDEV_ATTR(dev);
+	int i, ret;
+
+	for (i = 0, ret = 0; i < UACCE_QFRT_MAX - 1; i++)
+		ret += sprintf(buf + ret, "%lu\t", uacce->ops->qf_pg_start[i]);
+
+	ret += sprintf(buf + ret, "%lu\n", uacce->ops->qf_pg_start[i]);
+
+	return ret;
+}
+static DEVICE_ATTR(qfrs_pg_start, S_IRUGO, uacce_dev_show_qfrs_pg_start, NULL);
+
 static struct attribute *uacce_dev_attrs[] = {
 	&dev_attr_id.attr,
 	&dev_attr_api.attr,
@@ -889,6 +905,7 @@ static struct attribute *uacce_dev_attrs[] = {
 	&dev_attr_flags.attr,
 	&dev_attr_available_instances.attr,
 	&dev_attr_algorithms.attr,
+	&dev_attr_qfrs_pg_start.attr,
 	NULL,
 };
 
