@@ -20,9 +20,6 @@
 #include "wd_dummy_usr_if.h"
 #include "dummy_hw_usr_if.h"
 
-#define TEST_CONT_PAGE
-#define TEST_VMAP_IN_MAP
-
 #define MAX_DEV 3
 #define MAX_QUEUE 4
 #define QUEUE_YEILD_MS 50
@@ -41,7 +38,6 @@ struct dummy_hw_queue {
 	bool used;
 	struct task_struct *tsk;
 	__u32 tail;
-	void *vmap;
 	struct uacce_qfile_region *ss_qfr;
 
 	struct uacce_queue wdq;
@@ -62,27 +58,29 @@ static struct dummy_hw {
 
 static int _do_copy(struct uacce_queue *q, void *tgt, void *src, size_t len)
 {
-	struct dummy_hw_queue *hwq = (struct dummy_hw_queue *)q->priv;
+	struct uacce_qfile_region *ss_qfr = q->qfrs[UACCE_QFRT_SS];
 	int ret = 0;
 	size_t iova_base = q->qfrs[UACCE_QFRT_SS]->iova;
 	size_t ktgt = (unsigned long)tgt - iova_base;
 	size_t ksrc = (unsigned long)src - iova_base;
-	size_t range = q->qfrs[UACCE_QFRT_SS]->nr_pages << PAGE_SHIFT;
+	size_t range = ss_qfr->nr_pages << PAGE_SHIFT;
 
-	if (ktgt > range || ktgt + len> range) {
+	if (ktgt > range || ktgt + len > range) {
+		dev_dbg(&q->uacce->dev, "ktgt(%lx, %lx) not in range(%lx)\n",
+			ktgt, len, range);
 		ret = -EINVAL;
 		goto out;
 	}
 
 	if (ksrc > range || ksrc + len > range) {
+		dev_dbg(&q->uacce->dev, "ksrc(%lx, %lx) not in range(%lx)\n",
+			ksrc, len, range);
 		ret = -EINVAL;
 		goto out;
 	}
 
-	ktgt += (unsigned long)hwq->vmap;
-	ksrc += (unsigned long)hwq->vmap;
-	dev_dbg(&q->uacce->dev, "memcpy(%lx, %lx, %lx), va=%lx, kva=%lx\n",
-		ktgt, ksrc, len, iova_base, (unsigned long)hwq->vmap);
+	ktgt += (unsigned long)ss_qfr->kaddr;
+	ksrc += (unsigned long)ss_qfr->kaddr;
 	memcpy((void *)ktgt, (void *)ksrc, len);
 
 out:
@@ -116,9 +114,9 @@ static void _queue_work(struct dummy_hw_queue *hwq)
 				 hwq->reg->ring[hwq->tail].tgt_addr,
 				 hwq->reg->ring[hwq->tail].src_addr,
 				 hwq->reg->ring[hwq->tail].size);
-		dev_dbg(dev, "memcpy(%p, %p, %ld) = %d",
-			hwq->reg->ring[hwq->tail].tgt_addr,
-			hwq->reg->ring[hwq->tail].src_addr,
+		dev_dbg(dev, "memcpy(%lx, %lx, %ld) = %d",
+			(unsigned long)hwq->reg->ring[hwq->tail].tgt_addr,
+			(unsigned long)hwq->reg->ring[hwq->tail].src_addr,
 			hwq->reg->ring[hwq->tail].size,
 			hwq->reg->ring[hwq->tail].ret);
 		hwq->reg->ring[hwq->tail].ret = 0;
@@ -206,69 +204,6 @@ static int dummy_mmap(struct uacce_queue *q, struct vm_area_struct *vma,
 			       PAGE_SIZE, vma->vm_page_prot);
 }
 
-static int dummy_map(struct uacce_queue *q, struct uacce_qfile_region *qfr)
-{
-	struct dummy_hw_queue *hwq = (struct dummy_hw_queue *)q->priv;
-	struct device *dev = &q->uacce->dev;
-
-	dev_dbg(dev, "map qfr (%s)\n", uacce_qfrt_str(qfr));
-
-	switch (qfr->type) {
-	case UACCE_QFRT_SS:
-		if (hwq->ss_qfr)
-			return -EBUSY;
-		else
-			hwq->ss_qfr = qfr;
-#ifdef TEST_VMAP_IN_MAP
-		hwq->vmap = vmap(hwq->ss_qfr->pages, hwq->ss_qfr->nr_pages,
-				 VM_MAP, PAGE_KERNEL);
-		if (!hwq->vmap)
-			return -ENOMEM;
-
-		dev_dbg(dev, "vmap virutal address to %lx\n",
-			  (unsigned long)hwq->vmap);
-#endif
-
-		break;
-
-	case UACCE_QFRT_DUS:
-		break;
-
-	default:
-		dev_err(dev, "map invalid qfr (%s)\n",
-			uacce_qfrt_str(qfr));
-		return -EINVAL;
-	}
-
-	return 0;
-}
-
-static void dummy_unmap(struct uacce_queue *q, struct uacce_qfile_region *qfr)
-{
-	struct dummy_hw_queue *hwq = (struct dummy_hw_queue *)q->priv;
-
-	switch (qfr->type) {
-	case UACCE_QFRT_SS:
-		BUG_ON(!hwq->vmap);
-		dev_dbg(&hwq->wdq.uacce->dev, "unmap vmap %lx\n",
-			(unsigned long)hwq->vmap);
-		vunmap(hwq->vmap);
-		hwq->vmap = NULL;
-		if (hwq->ss_qfr)
-			hwq->ss_qfr = NULL;
-
-		break;
-
-	case UACCE_QFRT_DUS:
-		break;
-
-	default:
-		dev_err(&q->uacce->dev, "unmap invalid qfr (%s)\n",
-			uacce_qfrt_str(qfr));
-		break;
-	}
-}
-
 static long dummy_ioctl(struct uacce_queue *q, unsigned int cmd,
 				unsigned long arg)
 {
@@ -291,24 +226,6 @@ static void dummy_mask_notify(struct uacce_queue *q, int event_mask)
 
 int queue_worker(void *data) {
 	struct dummy_hw_queue *hwq = data;
-
-#ifndef TEST_VMAP_IN_MAP
-	struct device *dev = &hwq->wdq.uacce->dev;
-	if (hwq->ss_qfr) {
-		BUG_ON(hwq->vmap);
-
-		hwq->vmap = vmap(hwq->ss_qfr->pages, hwq->ss_qfr->nr_pages,
-				 VM_MAP, PAGE_KERNEL);
-		if (!hwq->vmap)
-			return -ENOMEM;
-
-		dev_dbg(dev, "vmap virutal address to %lx\n",
-			  (unsigned long)hwq->vmap);
-	} else {
-		dev_err(dev, "ss qfr not mapped\n");
-		return -EINVAL;
-	}
-#endif
 
 	do {
 		_queue_work(hwq);
@@ -359,16 +276,8 @@ static int dummy_get_available_instances(struct uacce *uacce) {
 static struct uacce_ops dummy_ops = {
 	.owner = THIS_MODULE,
 	.api_ver = "dummy_v1",
-	.qf_pg_start = { 0, UACCE_QFR_NA,
-			 DUMMY_DUS_START >> PAGE_SHIFT,
-			 DUMMY_SS_START >> PAGE_SHIFT
-	},
-
-#ifdef TEST_CONT_PAGE
-	.flags = UACCE_DEV_NOIOMMU | UACCE_DEV_CONT_PAGE,
-#else
+	.qf_pg_start = { 0, UACCE_QFR_NA, UACCE_QFR_NA, 1 },
 	.flags = UACCE_DEV_NOIOMMU,
-#endif
 
 	.get_queue = dummy_get_queue,
 	.put_queue = dummy_put_queue,
@@ -376,8 +285,6 @@ static struct uacce_ops dummy_ops = {
 	.stop_queue = dummy_stop_queue,
 	.is_q_updated = dummy_is_q_updated,
 	.mmap = dummy_mmap,
-	.map = dummy_map,
-	.unmap = dummy_unmap,
 	.ioctl = dummy_ioctl,
 	.mask_notify = dummy_mask_notify,
 	.get_available_instances = dummy_get_available_instances,

@@ -127,11 +127,11 @@ static int uacce_queue_map_qfr(struct uacce_queue *q,
 	if (!(qfr->flags & UACCE_QFRF_MAP))
 		return 0;
 
+	if (q->uacce->ops->flags & UACCE_DEV_NOIOMMU)
+		return 0;
+
 	dev_dbg(&q->uacce->dev, "queue map %s qfr(npage=%d, iova=%lx)\n",
 		uacce_qfrt_str(qfr), qfr->nr_pages, qfr->iova);
-
-	if (q->uacce->ops->flags & UACCE_DEV_NOIOMMU)
-		return q->uacce->ops->map(q, qfr);
 
 	return uacce_iommu_map_qfr(q, qfr);
 }
@@ -143,7 +143,7 @@ static void uacce_queue_unmap_qfr(struct uacce_queue *q,
 		return;
 
 	if (q->uacce->ops->flags & UACCE_DEV_NOIOMMU)
-		q->uacce->ops->unmap(q, qfr);
+		return;
 
 	uacce_iommu_unmap_qfr(q, qfr);
 }
@@ -274,6 +274,7 @@ static struct uacce_qfile_region *uacce_create_region(struct uacce_queue *q,
 		return qfr;
 	}
 
+	/* allocate memory */
 	if (uacce->ops->flags & UACCE_DEV_NOIOMMU) {
 		/* NOIOMMU use continue dma memory only */
 		qfr->kaddr = dma_alloc_coherent(uacce->pdev,
@@ -329,9 +330,16 @@ err_with_qfr:
 	return ERR_PTR(ret);
 }
 
-static void uacce_destroy_region(struct uacce_qfile_region *qfr)
+static void uacce_destroy_region(struct uacce_queue *q,
+				 struct uacce_qfile_region *qfr)
 {
-	if (qfr->pages) {
+	struct uacce *uacce = q->uacce;
+	uacce_queue_unmap_qfr(q, qfr);
+
+	if (uacce->ops->flags & UACCE_DEV_NOIOMMU) {
+		dma_free_coherent(uacce->pdev, qfr->nr_pages << PAGE_SHIFT,
+				  qfr->kaddr, qfr->dma);
+	} else if (qfr->pages) {
 		if (qfr->flags & UACCE_QFRF_KMAP && qfr->kaddr) {
 			pr_debug("uacce: vunmap qfr %s\n", uacce_qfrt_str(qfr));
 			vunmap(qfr->kaddr);
@@ -568,29 +576,18 @@ static int uacce_fops_release(struct inode *inode, struct file *filep)
 		if (!qfr)
 			continue;
 
-		if (uacce->ops->flags & UACCE_DEV_NOIOMMU) {
-			if (qfr->dma)
-				dma_free_coherent(uacce->pdev,
-						  qfr->nr_pages << PAGE_SHIFT,
-						  qfr->kaddr, qfr->dma);
-			kfree(qfr);
+		is_to_free_region = false;
+		uacce_queue_unmap_qfr(q, qfr);
+		if (i == UACCE_QFRT_SS) {
+			list_del(&q->list);
+			if (list_empty(&qfr->qs))
+				is_to_free_region = true;
+		} else
+			is_to_free_region = true;
 
-		} else {
-			is_to_free_region = false;
-			if (!(qfr->flags & UACCE_QFRF_SELFMT)) {
-				uacce_queue_unmap_qfr(q, qfr);
-				if (i == UACCE_QFRT_SS) {
-					list_del(&q->list);
-					if (list_empty(&qfr->qs))
-						is_to_free_region = true;
-				} else
-					is_to_free_region = true;
-			}
-
-			if (is_to_free_region) {
-				free_pages += qfr->nr_pages;
-				uacce_destroy_region(qfr);
-			}
+		if (is_to_free_region) {
+			free_pages += qfr->nr_pages;
+			uacce_destroy_region(q, qfr);
 		}
 
 		qfr = NULL;
@@ -647,14 +644,9 @@ static enum uacce_qfrt uacce_get_region_type(struct uacce *uacce,
 
 	case UACCE_QFRT_DUS:
 	case UACCE_QFRT_SS:
+		/* todo: this can be valid to protect the process space */
 		if (uacce->ops->flags & UACCE_DEV_FAULT_FROM_DEV)
 			return UACCE_QFRT_INVALID;
-
-		if (uacce->ops->flags & UACCE_DEV_DRVMAP_DUS &&
-		    !uacce->ops->mmap) {
-			dev_err(&uacce->dev, "no driver mmap!\n");
-			return UACCE_QFRT_INVALID;
-		}
 		break;
 
 	default:
@@ -740,8 +732,7 @@ static int uacce_fops_mmap(struct file *filep, struct vm_area_struct *vma)
 		break;
 
 	case UACCE_QFRT_DUS:
-		if((q->uacce->ops->flags & UACCE_DEV_DRVMAP_DUS) ||
-			(q->uacce->ops->flags & UACCE_DEV_NOIOMMU)) {
+		if(q->uacce->ops->flags & UACCE_DEV_NOIOMMU) {
 			flags = UACCE_QFRF_SELFMT;
 			break;
 		}
@@ -954,14 +945,6 @@ static void uacce_destroy_chrdev(struct uacce *uacce)
 	idr_remove(&uacce_idr, uacce->dev_id);
 }
 
-static int uacce_default_map(struct uacce_queue *q,
-			     struct uacce_qfile_region *qfr)
-{
-	dev_dbg(&q->uacce->dev, "fake map %s qfr(npage=%d, iova=%lx)\n",
-		uacce_qfrt_str(qfr), qfr->nr_pages, qfr->iova);
-	return -ENODEV;
-}
-
 static int uacce_default_get_available_instances(struct uacce *uacce)
 {
 	return -1;
@@ -971,13 +954,6 @@ static int uacce_default_start_queue(struct uacce_queue *q)
 {
 	dev_dbg(&q->uacce->dev, "fake start queue");
 	return 0;
-}
-
-static void uacce_default_unmap(struct uacce_queue *q,
-				struct uacce_qfile_region *qfr)
-{
-	dev_dbg(&q->uacce->dev, "fake unmap %s qfr(npage=%d, iova=%lx)\n",
-		uacce_qfrt_str(qfr), qfr->nr_pages, qfr->iova);
 }
 
 static int uacce_dev_match(struct device *dev, void *data)
@@ -1134,12 +1110,6 @@ int uacce_register(struct uacce *uacce)
 		dev_warn(&uacce->dev, "SVM/SAV device should support PASID\n");
 		return -EINVAL;
 	}
-
-	if (!uacce->ops->map)
-		uacce->ops->map = uacce_default_map;
-
-	if (!uacce->ops->unmap)
-		uacce->ops->unmap = uacce_default_unmap;
 
 	if (!uacce->ops->start_queue)
 		uacce->ops->start_queue = uacce_default_start_queue;
