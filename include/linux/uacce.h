@@ -17,16 +17,6 @@ struct uacce;
 #define UACCE_QFRF_CONT_PAGE	BIT(3)	/* use continuous pages */
 #define UACCE_QFRF_SELFMT	BIT(4)	/* self maintained qfr */
 
-#define UACCE_QFR_NA ((unsigned long)-1)
-enum uacce_qfrt {
-	UACCE_QFRT_MMIO = 0,	/* device mmio region */
-	UACCE_QFRT_DKO,		/* device kernel-only */
-	UACCE_QFRT_DUS,		/* device user share */
-	UACCE_QFRT_SS,		/* static share memory */
-	UACCE_QFRT_MAX,
-};
-#define UACCE_QFRT_INVALID UACCE_QFRT_MAX
-
 struct uacce_qfile_region {
 	enum uacce_qfrt type;
 	unsigned long iova;
