@@ -9,6 +9,7 @@
 
 /* page number for queue file region */
 #define QM_DOORBELL_PAGE_NR	1
+#if 0
 #define QM_DKO_PAGE_NR		4
 #define QM_DUS_PAGE_NR		36
 
@@ -16,6 +17,7 @@
 #define QM_DKO_PAGE_START (QM_DOORBELL_PG_START + QM_DOORBELL_PAGE_NR)
 #define QM_DUS_PAGE_START (QM_DKO_PAGE_START + QM_DKO_PAGE_NR)
 #define QM_SS_PAGE_START (QM_DUS_PAGE_START + QM_DUS_PAGE_NR)
+#endif
 
 #define QM_DOORBELL_OFFSET      0x340
 
