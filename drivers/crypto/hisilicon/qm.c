@@ -1287,8 +1287,6 @@ static int hisi_qm_get_available_instances(struct uacce *uacce)
 			ret++;
 	write_unlock(&qm->qps_lock);
 
-	dev_err(&qm->pdev->dev, "kernel instance remained: %d!\n", ret);
-
 	if (!qm->use_dma_api)
 		ret = (ret == qm->qp_num) ? 1 : 0;
 
