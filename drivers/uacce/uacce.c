@@ -332,12 +332,11 @@ err_with_qfr:
 	return ERR_PTR(ret);
 }
 
+/* we assume you have uacce_queue_unmap_qfr(q, qfr) from all related queues */
 static void uacce_destroy_region(struct uacce_queue *q,
 				 struct uacce_qfile_region *qfr)
 {
 	struct uacce *uacce = q->uacce;
-
-	uacce_queue_unmap_qfr(q, qfr);
 
 	if (qfr->flags & UACCE_QFRF_DMA) {
 		dev_dbg(uacce->pdev, "free dma qfr %s (kaddr=%lx, dma=%llx)\n",
