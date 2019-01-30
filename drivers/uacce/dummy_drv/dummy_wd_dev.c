@@ -194,8 +194,10 @@ static int dummy_mmap(struct uacce_queue *q, struct vm_area_struct *vma,
 		      struct uacce_qfile_region *qfr)
 {
 	struct dummy_hw_queue *hwq = (struct dummy_hw_queue *)q->priv;
+	struct page *page = virt_to_page(hwq->reg);
 
-	dev_dbg(&q->uacce->dev, "mmap mmio space\n");
+	dev_dbg(&q->uacce->dev, "mmap mmio space (ref=%d)\n",
+		page_ref_count(page));
 	if (vma->vm_pgoff != 0 || qfr->nr_pages > 1 ||
 	    !(vma->vm_flags & VM_SHARED))
 		return -EINVAL;
