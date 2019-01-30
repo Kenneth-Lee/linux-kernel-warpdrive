@@ -1059,6 +1059,7 @@ void hisi_qm_release_qp(struct hisi_qp *qp)
 	struct device *dev = &qm->pdev->dev;
 
 	write_lock(&qm->qps_lock);
+	dev_dbg(dev, "release qp %d\n", qp->qp_id);
 	qm->qp_array[qp->qp_id] = NULL;
 	clear_bit(qp->qp_id, qm->qp_bitmap);
 	write_unlock(&qm->qps_lock);
@@ -1285,6 +1286,8 @@ static int hisi_qm_get_available_instances(struct uacce *uacce)
 		if (!qm->qp_array[i])
 			ret++;
 	write_unlock(&qm->qps_lock);
+
+	dev_err(&qm->pdev->dev, "kernel instance remained: %d!\n", ret);
 
 	if (!qm->use_dma_api)
 		ret = (ret == qm->qp_num) ? 1 : 0;
