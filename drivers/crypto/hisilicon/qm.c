@@ -1507,7 +1507,12 @@ static int qm_register_uacce(struct hisi_qm *qm)
 	uacce->algs = qm->algs;
 
 	if (qm->use_dma_api) {
-		uacce->ops->flags = UACCE_DEV_NOIOMMU;
+		/*
+		 * Noiommu, SVA, and crypto-only modes are all using dma api.
+		 * So we don't use uacce to allocate memory. We allocate it
+		 * by ourself with the UACCE_DEV_DRVMAP_DUS flag.
+		 */
+		uacce->ops->flags = UACCE_DEV_NOIOMMU | UACCE_DEV_DRVMAP_DUS;
 		uacce->ops->api_ver = HISI_QM_API_VER_BASE
 				      UACCE_API_VER_NOIOMMU_SUBFIX;
 	} else {
@@ -1726,7 +1731,7 @@ int __hisi_qm_start(struct hisi_qm *qm)
 
 #ifdef CONFIG_CRYPTO_QM_UACCE
 	/* check if the size exceed the DKO boundary */
-	if (qm->use_uacce) {
+	if (qm->use_uacce && !qm->use_dma_api) {
 		WARN_ON(qm->uacce.ops->qf_pg_start[UACCE_QFRT_DKO] == 
 		    UACCE_QFR_NA);
 		dko_size = qm->uacce.ops->qf_pg_start[UACCE_QFRT_DUS] -
