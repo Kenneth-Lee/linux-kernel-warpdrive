@@ -361,27 +361,28 @@ static long uacce_cmd_share_qfr(struct uacce_queue *tgt, int fd)
 {
 	struct file *filep = fget(fd);
 	struct uacce_queue *src;
-	int ret;
+	int ret = -EINVAL;
 
-	if (!filep || filep->f_op != &uacce_fops)
-		return -EINVAL;
+	if (!filep)
+		return ret;
+
+	if (filep->f_op != &uacce_fops)
+		goto out_with_fd;
 
 	src = (struct uacce_queue *)filep->private_data;
 	if (!src)
-		return -EINVAL;
+		goto out_with_fd;
 
 	/* no ssva is needed if the dev can do fault-from-dev */
 	if (tgt->uacce->ops->flags & UACCE_DEV_FAULT_FROM_DEV)
-		return -EINVAL;
+		goto out_with_fd;
 
 	dev_dbg(&src->uacce->dev, "share ss with %s\n",
 		dev_name(&tgt->uacce->dev));
 
 	uacce_qs_wlock();
-	if (!src->qfrs[UACCE_QFRT_SS] || tgt->qfrs[UACCE_QFRT_SS]) {
-		ret = -EINVAL;
+	if (!src->qfrs[UACCE_QFRT_SS] || tgt->qfrs[UACCE_QFRT_SS])
 		goto out_with_lock;
-	}
 
 	ret = uacce_queue_map_qfr(tgt, src->qfrs[UACCE_QFRT_SS]);
 	if (ret)
@@ -389,9 +390,12 @@ static long uacce_cmd_share_qfr(struct uacce_queue *tgt, int fd)
 
 	tgt->qfrs[UACCE_QFRT_SS] = src->qfrs[UACCE_QFRT_SS];
 	list_add(&tgt->list, &src->qfrs[UACCE_QFRT_SS]->qs);
+	ret = 0;
 
 out_with_lock:
 	uacce_qs_wunlock();
+out_with_fd:
+	fput(filep);
 	return ret;
 }
 
