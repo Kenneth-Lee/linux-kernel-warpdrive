@@ -14,7 +14,7 @@ struct uacce;
 #define UACCE_QFRF_MAP		BIT(0)	/* map to current queue */
 #define UACCE_QFRF_MMAP		BIT(1)	/* map to user space */
 #define UACCE_QFRF_KMAP 	BIT(2)	/* map to kernel space */
-#define UACCE_QFRF_CONT_PAGE	BIT(3)	/* use continuous pages */
+#define UACCE_QFRF_DMA		BIT(3)	/* use dma api for the region */
 #define UACCE_QFRF_SELFMT	BIT(4)	/* self maintained qfr */
 
 struct uacce_qfile_region {
