@@ -1446,26 +1446,12 @@ static int qm_set_sqctype(struct uacce_queue *q, u16 type)
 {
 	struct hisi_qm *qm = q->uacce->priv;
 	struct hisi_qp *qp = (struct hisi_qp *)q->priv;
-	struct device *dev = &q->uacce->dev;
-	struct qm_sqc *sqc;
-	int ret;
 
 	write_lock(&qm->qps_lock);
-	if (!qp->sqc_dma) {
-		dev_info(dev, "Please start queue before set sqc type\n");
-		ret = -EBUSY;
-		goto out_with_lock;
-	}
-
-	sqc = qp->sqc;
 	qp->alg_type = type;
-
-	sqc->w13 = QM_MK_SQC_W13(0, 1, qp->alg_type);
-	ret = qm_mb(qm, QM_MB_CMD_SQC, qp->sqc_dma, qp->qp_id, 0, 0);
-
-out_with_lock:
 	write_unlock(&qm->qps_lock);
-	return ret;
+
+	return 0;
 }
 
 static long hisi_qm_uacce_ioctl(struct uacce_queue *q, unsigned int cmd,
