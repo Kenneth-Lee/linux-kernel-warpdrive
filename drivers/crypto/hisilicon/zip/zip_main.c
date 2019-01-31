@@ -241,8 +241,8 @@ static u32 pf_q_num = HZIP_PF_DEF_Q_NUM;
 module_param_cb(pf_q_num, &pf_q_num_ops, &pf_q_num, 0444);
 MODULE_PARM_DESC(pf_q_num, "Number of queues in PF(v1 0-4096, v2 0-1024)");
 
-static int uacce_mode;
-module_param(uacce_mode, int, UACCE_MODE_NOUACCE);
+static int uacce_mode = UACCE_MODE_NOUACCE;
+module_param(uacce_mode, int, 0444);
 
 static const struct pci_device_id hisi_zip_dev_ids[] = {
 	{ PCI_DEVICE(PCI_VENDOR_ID_HUAWEI, 0xa250) },
