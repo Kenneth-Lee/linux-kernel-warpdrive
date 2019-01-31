@@ -163,6 +163,8 @@
 
 #define QMC_ALIGN(sz) ALIGN(sz, 32)
 
+static int __hisi_qm_start(struct hisi_qm *qm);
+
 enum vft_type {
 	SQC_VFT = 0,
 	CQC_VFT,
@@ -1672,7 +1674,7 @@ void hisi_qm_uninit(struct hisi_qm *qm)
 }
 EXPORT_SYMBOL_GPL(hisi_qm_uninit);
 
-int __hisi_qm_start(struct hisi_qm *qm)
+static int __hisi_qm_start(struct hisi_qm *qm)
 {
 	struct pci_dev *pdev = qm->pdev;
 	struct device *dev = &pdev->dev;
@@ -1775,7 +1777,6 @@ int __hisi_qm_start(struct hisi_qm *qm)
 
 	return 0;
 }
-EXPORT_SYMBOL_GPL(__hisi_qm_start);
 
 /**
  * hisi_qm_start() - start qm
