@@ -445,7 +445,7 @@ static irqreturn_t qm_aeq_irq(int irq, void *data)
 	u32 type;
 
 	while (QM_AEQE_PHASE(aeqe) == QM_AEQC_PHASE(aeqc)) {
-		type = aeqe->dw0 >> 16;
+		type = aeqe->dw0 >> 17;
 		if (type < ARRAY_SIZE(qm_fifo_overflow))
 			dev_err(&qm->pdev->dev, "%s overflow\n",
 				qm_fifo_overflow[type]);
