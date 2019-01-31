@@ -1020,7 +1020,7 @@ struct hisi_qp *hisi_qm_create_qp(struct hisi_qm *qm, u8 alg_type)
 	if (qm->use_dma_api) {
 		qp->qdma.size = qm->sqe_size * QM_Q_DEPTH +
 				sizeof(struct cqe) * QM_Q_DEPTH,
-		qp->qdma.va = dma_zalloc_coherent(dev, qp->qdma.size,
+		qp->qdma.va = dma_alloc_coherent(dev, qp->qdma.size,
 						 &qp->qdma.dma,
 						 GFP_KERNEL | __GFP_ZERO);
 		if (!qp->qdma.va)
@@ -1849,9 +1849,9 @@ int hisi_qm_start(struct hisi_qm *qm)
 				QMC_ALIGN(sizeof(struct qm_cqc) * qm->qp_num) +
 				QMC_ALIGN(sizeof(struct qm_eqc)) +
 				QMC_ALIGN(sizeof(struct qm_aeqc));
-		qm->qdma.va = dma_zalloc_coherent(dev, qm->qdma.size,
-						  &qm->qdma.dma,
-						  GFP_KERNEL | __GFP_ZERO);
+		qm->qdma.va = dma_alloc_coherent(dev, qm->qdma.size,
+						 &qm->qdma.dma,
+						 GFP_KERNEL | __GFP_ZERO);
 		dev_dbg(dev, "allocate qm dma buf(va=%p, dma=%pad, size=%lx)\n",
 			qm->qdma.va, &qm->qdma.dma, qm->qdma.size);
 		if (!qm->qdma.va)
