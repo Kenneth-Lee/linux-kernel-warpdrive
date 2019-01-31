@@ -1578,8 +1578,10 @@ int hisi_qm_init(struct hisi_qm *qm)
 		goto err_disable_pcidev;
 	}
 
+#ifdef CONFIG_CRYPTO_QM_UACCE
 	qm->phys_base = pci_resource_start(pdev, 2);
 	qm->size = pci_resource_len(qm->pdev, 2);
+#endif
 	qm->io_base = ioremap(pci_resource_start(pdev, 2),
 			      pci_resource_len(qm->pdev, 2));
 	if (!qm->io_base) {
