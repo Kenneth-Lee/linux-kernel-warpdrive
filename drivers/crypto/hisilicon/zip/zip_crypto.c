@@ -294,7 +294,7 @@ static int hisi_zip_compress(struct crypto_tfm *tfm, const u8 *src,
 
 static u16 get_extra_field_size(const u8 *start)
 {
-	return *((u16 *)start);
+	return *((u16 *)start) + 2;
 }
 
 static u32 get_name_field_size(const u8 *start)
