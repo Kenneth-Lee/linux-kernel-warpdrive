@@ -1062,14 +1062,14 @@ void hisi_qm_release_qp(struct hisi_qp *qp)
 	struct qm_dma *qdma = &qp->qdma;
 	struct device *dev = &qm->pdev->dev;
 
+	if (qm->use_dma_api && qdma->va)
+		dma_free_coherent(dev, qdma->size, qdma->va, qdma->dma);
+
 	write_lock(&qm->qps_lock);
 	dev_dbg(dev, "release qp %d\n", qp->qp_id);
 	qm->qp_array[qp->qp_id] = NULL;
 	clear_bit(qp->qp_id, qm->qp_bitmap);
 	write_unlock(&qm->qps_lock);
-
-	if (qm->use_dma_api && qdma->va)
-		dma_free_coherent(dev, qdma->size, qdma->va, qdma->dma);
 
 	kfree(qp);
 }
