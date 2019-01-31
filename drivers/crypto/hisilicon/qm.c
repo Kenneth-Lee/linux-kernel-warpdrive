@@ -1899,8 +1899,7 @@ int hisi_qm_start(struct hisi_qm *qm)
 			qm->qdma.va, &qm->qdma.dma, qm->qdma.size);
 		if (!qm->qdma.va)
 			return -ENOMEM;
-	} else
-		WARN_ON(0);
+	}
 
 	return __hisi_qm_start(qm);
 }
