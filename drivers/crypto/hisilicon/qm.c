@@ -1023,8 +1023,10 @@ struct hisi_qp *hisi_qm_create_qp(struct hisi_qm *qm, u8 alg_type)
 		qp->qdma.va = dma_alloc_coherent(dev, qp->qdma.size,
 						 &qp->qdma.dma,
 						 GFP_KERNEL | __GFP_ZERO);
-		if (!qp->qdma.va)
+		if (!qp->qdma.va) {
+			ret = ERR_PTR(-ENOMEM);
 			goto err_clear_bit;
+		}
 
 		dev_dbg(dev, "allocate qp dma buf(va=%p, dma=%pad, size=%lx)\n",
 			qp->qdma.va, &qp->qdma.dma, qp->qdma.size);
