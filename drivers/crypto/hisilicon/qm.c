@@ -1096,9 +1096,9 @@ int hisi_qm_start_qp(struct hisi_qp *qp, unsigned long arg)
 	size_t off = 0;
 
 #define QP_INIT_BUF(qp, type, size) do { \
-	(qp)->type = (struct qm_##type *)((void *)(qp)->qdma.va + (off)); \
+	(qp)->type = ((qp)->qdma.va + (off)); \
 	(qp)->type##_dma = (qp)->qdma.dma + (off); \
-	off += size; \
+	off += (size); \
 } while (0)
 
 	if (!qp->qdma.dma) {
@@ -1106,9 +1106,9 @@ int hisi_qm_start_qp(struct hisi_qp *qp, unsigned long arg)
 		return -EINVAL;
 	}
 
-	/** sqc need 128 bytes alignment */
+	/* sq need 128 bytes alignment */
 	if (qp->qdma.dma & 0x7F) {
-		dev_err(dev, "cannot get qm dma buffer\n");
+		dev_err(dev, "qm sq is not aligned to 128 byte\n");
 		return -EINVAL;
 	}
 
@@ -1181,15 +1181,15 @@ int hisi_qm_stop_qp(struct hisi_qp *qp)
 	struct device *dev = &qp->qm->pdev->dev;
 	int i = 0;
 
+	/* it is stopped */
 	if (test_bit(QP_STOP, &qp->qp_status.flags))
-		return 0; /* it is stopping */
+		return 0;
 
 	while (atomic_read(&qp->qp_status.used)) {
 		i++;
 		msleep(5);
 		if (i == 10) {
-			dev_err(dev, "Cannot drain out data for stopping, "
-				"Force stop!\n");
+			dev_err(dev, "Cannot drain out data for stopping, force to stop!\n");
 			return -EBUSY;
 		}
 	}
@@ -1689,19 +1689,16 @@ static int __hisi_qm_start(struct hisi_qm *qm)
 #endif
 
 #define QM_INIT_BUF(qm, type, num) do { \
-	(qm)->type = (struct qm_##type *)((void *)(qm)->qdma.va + (off)); \
+	(qm)->type = ((qm)->qdma.va + (off)); \
 	(qm)->type##_dma = (qm)->qdma.dma + (off); \
-	off += QMC_ALIGN(sizeof(struct qm_##type)*(num)); \
+	off += QMC_ALIGN(sizeof(struct qm_##type) * (num)); \
 } while (0)
 
 	/* dma must be ready before start, nomatter by init or by uacce mmap */
 	WARN_ON(!qm->qdma.dma);
 
-	/* fix me: this should be fixed in v2 */
-	if (qm->qp_num == 0) {
-		dev_info(dev, "Allocated zero qp for this qm!\n");
-		return 0;
-	}
+	if (qm->qp_num == 0)
+		return -EINVAL;
 
 	if (qm->fun_type == QM_HW_PF) {
 		if (!qm->ops->set_vft)
@@ -1803,7 +1800,7 @@ int hisi_qm_start(struct hisi_qm *qm)
 		QMC_ALIGN(sizeof(struct qm_aeqc))) >> PAGE_SHIFT;
 #endif
 
-	dev_dbg(dev, "qm start with %d qs\n", qm->qp_num);
+	dev_dbg(dev, "qm start with %d queue pairs\n", qm->qp_num);
 
 	if (!qm->qp_num)
 		return -EINVAL;
