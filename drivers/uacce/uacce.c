@@ -545,8 +545,8 @@ static int uacce_fops_open(struct inode *inode, struct file *filep)
 
 #ifdef CONFIG_IOMMU_SVA
 	if (uacce->ops->flags & UACCE_DEV_PASID)
-		ret = __iommu_sva_bind_device(uacce->pdev, current->mm, &pasid,
-					      IOMMU_SVA_FEAT_IOPF, NULL);
+		ret = iommu_sva_bind_device(uacce->pdev, current->mm, &pasid,
+					    IOMMU_SVA_FEAT_IOPF, NULL);
 #endif
 
 	if (ret)
@@ -556,6 +556,7 @@ static int uacce_fops_open(struct inode *inode, struct file *filep)
 	if (ret < 0)
 		return ret;
 
+	q->pasid = pasid;
 	q->uacce = uacce;
 	q->mm = current->mm;
 	memset(q->qfrs, 0, sizeof(q->qfrs));
@@ -655,6 +656,8 @@ static enum uacce_qfrt uacce_get_region_type(struct uacce *uacce,
 		break;
 
 	case UACCE_QFRT_DUS:
+		break;
+
 	case UACCE_QFRT_SS:
 		/* todo: this can be valid to protect the process space */
 		if (uacce->ops->flags & UACCE_DEV_FAULT_FROM_DEV)
@@ -975,6 +978,7 @@ static int uacce_default_start_queue(struct uacce_queue *q)
 	return 0;
 }
 
+#ifndef CONFIG_IOMMU_SVA
 static int uacce_dev_match(struct device *dev, void *data)
 {
 	if (dev->parent == data)
@@ -1088,7 +1092,7 @@ err_with_domain:
 	return ret;
 }
 
-void uacce_unset_iommu_domain(struct uacce *uacce)
+static void uacce_unset_iommu_domain(struct uacce *uacce)
 {
 	struct iommu_domain *domain;
 
@@ -1102,6 +1106,7 @@ void uacce_unset_iommu_domain(struct uacce *uacce)
 	} else
 		dev_err(&uacce->dev, "bug: no domain attached to device\n");
 }
+#endif
 
 /**
  *	uacce_register - register an accelerator
@@ -1137,9 +1142,11 @@ int uacce_register(struct uacce *uacce)
 		uacce->ops->get_available_instances =
 			uacce_default_get_available_instances;
 
+#ifndef CONFIG_IOMMU_SVA
 	ret = uacce_set_iommu_domain(uacce);
 	if (ret)
 		return ret;
+#endif
 
 	mutex_lock(&uacce_mutex);
 
@@ -1147,18 +1154,19 @@ int uacce_register(struct uacce *uacce)
 	if (ret)
 		goto err_with_lock;
 
+	if (uacce->ops->flags & UACCE_DEV_PASID) {
 #ifdef CONFIG_IOMMU_SVA
-	ret = iommu_sva_init_device(uacce->pdev, IOMMU_SVA_FEAT_IOPF, 0, 0,
-				    NULL);
-	if (ret) {
-		uacce_destroy_chrdev(uacce);
-		goto err_with_lock;
-	}
+		ret = iommu_sva_init_device(uacce->pdev, IOMMU_SVA_FEAT_IOPF,
+					    0, 0, NULL);
+		if (ret) {
+			uacce_destroy_chrdev(uacce);
+			goto err_with_lock;
+		}
 #else
-	if (uacce->ops->flags & UACCE_DEV_PASID)
 		uacce->ops->flags &=
 			~(UACCE_DEV_FAULT_FROM_DEV | UACCE_DEV_PASID);
 #endif
+	}
 
 	dev_dbg(&uacce->dev, "uacce state initialized to INIT");
 	atomic_set(&uacce->state, UACCE_ST_INIT);
@@ -1184,10 +1192,11 @@ void uacce_unregister(struct uacce *uacce)
 
 #ifdef CONFIG_IOMMU_SVA
 	iommu_sva_shutdown_device(uacce->pdev);
+#else
+	uacce_unset_iommu_domain(uacce);
 #endif
 
 	uacce_destroy_chrdev(uacce);
-	uacce_unset_iommu_domain(uacce);
 
 	mutex_unlock(&uacce_mutex);
 }
