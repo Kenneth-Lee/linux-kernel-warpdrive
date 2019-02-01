@@ -69,10 +69,8 @@ struct uacce_queue {
 	__u32 flags;
 	void *priv;
 	wait_queue_head_t wait;
-
-#ifdef CONFIG_IOMMU_SVA
 	int pasid;
-#endif
+
 	struct list_head list; /* as list for as->qs */
 
 	struct mm_struct *mm;
