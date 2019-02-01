@@ -1499,13 +1499,16 @@ static int qm_register_uacce(struct hisi_qm *qm)
 		 * So we don't use uacce to allocate memory. We allocate it
 		 * by ourself with the UACCE_DEV_DRVMAP_DUS flag.
 		 */
-		uacce->ops->flags = UACCE_DEV_NOIOMMU | UACCE_DEV_DRVMAP_DUS;
-		uacce->ops->api_ver = HISI_QM_API_VER_BASE
-				      UACCE_API_VER_NOIOMMU_SUBFIX;
+		if (qm->use_sva) {
+			uacce->ops->flags = UACCE_DEV_SVA | UACCE_DEV_DRVMAP_DUS;
+			uacce->ops->api_ver = HISI_QM_API_VER_BASE;
+		} else {
+
+			uacce->ops->flags = UACCE_DEV_NOIOMMU | UACCE_DEV_DRVMAP_DUS;
+			uacce->ops->api_ver = HISI_QM_API_VER_BASE
+					      UACCE_API_VER_NOIOMMU_SUBFIX;
+		}
 	} else {
-#ifdef CONFIG_IOMMU_SVA
-		uacce->ops->flags = UACCE_DEV_SVA | UACCE_DEV_KMAP_DUS;
-#endif
 		uacce->ops->api_ver = HISI_QM_API_VER_BASE;
 	}
 

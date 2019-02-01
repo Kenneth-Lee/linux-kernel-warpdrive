@@ -221,6 +221,7 @@ struct hisi_qm {
 	const char *algs;
 	bool use_dma_api;	/* use dma or iommu api api */
 	bool use_uacce;		/* register to uacce */
+	bool use_sva;
 
 #ifdef CONFIG_CRYPTO_QM_UACCE
 	resource_size_t phys_base;
