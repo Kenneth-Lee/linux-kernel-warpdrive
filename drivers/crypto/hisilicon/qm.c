@@ -1602,20 +1602,12 @@ int hisi_qm_init(struct hisi_qm *qm)
 	mutex_init(&qm->mailbox_lock);
 	rwlock_init(&qm->qps_lock);
 
-	if (pdev->is_physfn) {
-		ret = qm_dev_mem_reset(qm);
-		if (ret)
-			goto err_unregister_irq;
-	}
-
 	dev_dbg(dev, "init qm %s with %s\n",
 		pdev->is_physfn ? "pf" : "vf",
 		qm->use_dma_api ? "dma api" : "iommu api");
 
 	return 0;
 
-err_unregister_irq:
-	qm_irq_unregister(qm);
 err_free_irq_vectors:
 	pci_free_irq_vectors(pdev);
 err_iounmap:
@@ -1737,6 +1729,10 @@ static int __hisi_qm_start(struct hisi_qm *qm)
 		return -EINVAL;
 
 	if (qm->fun_type == QM_HW_PF) {
+		ret = qm_dev_mem_reset(qm);
+		if (ret)
+			return ret;
+
 		ret = hisi_qm_set_vft(qm, 0, qm->qp_base, qm->qp_num);
 		if (ret)
 			return ret;
@@ -1938,11 +1934,6 @@ int hisi_qm_stop(struct hisi_qm *qm)
 			dev_err(dev, "Failed to set vft!\n");
 			return -EBUSY;
 		}
-
-		/* reset dev mem for possible next start */
-		ret = qm_dev_mem_reset(qm);
-		if (ret)
-			return ret;
 	}
 
 	return 0;
