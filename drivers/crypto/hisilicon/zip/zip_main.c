@@ -267,6 +267,7 @@ static inline void hisi_zip_remove_from_list(struct hisi_zip *hisi_zip)
 
 static void hisi_zip_set_user_domain_and_cache(struct hisi_zip *hisi_zip)
 {
+	struct hisi_qm *qm = &hisi_zip->qm;
 	u32 val;
 
 	/* qm user domain */
@@ -294,9 +295,15 @@ static void hisi_zip_set_user_domain_and_cache(struct hisi_zip *hisi_zip)
 
 	writel(0x40001070, hisi_zip->qm.io_base + HZIP_BD_RUSER_32_63);
 	writel(0x40001070, hisi_zip->qm.io_base + HZIP_SGL_RUSER_32_63);
-	writel(0x40001070, hisi_zip->qm.io_base + HZIP_DATA_RUSER_32_63);
-	writel(0x40001070, hisi_zip->qm.io_base + HZIP_DATA_WUSER_32_63);
 	writel(0x40001070, hisi_zip->qm.io_base + HZIP_BD_WUSER_32_63);
+
+	if (qm->use_sva) {
+		writel(0x40001071, hisi_zip->qm.io_base + HZIP_DATA_RUSER_32_63);
+		writel(0x40001071, hisi_zip->qm.io_base + HZIP_DATA_WUSER_32_63);
+	} else {
+		writel(0x40001070, hisi_zip->qm.io_base + HZIP_DATA_RUSER_32_63);
+		writel(0x40001070, hisi_zip->qm.io_base + HZIP_DATA_WUSER_32_63);
+	}
 
 	/* fsm count */
 	writel(0xfffffff, hisi_zip->qm.io_base + HZIP_FSM_MAX_CNT);
@@ -621,7 +628,12 @@ static int hisi_zip_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 		qm->use_uacce = false;
 		break;
 	case UACCE_MODE_UACCE:
+#ifdef CONFIG_IOMMU_SVA
+		qm->use_dma_api = true;
+		qm->use_sva = true;
+#else
 		qm->use_dma_api = false;
+#endif
 		qm->use_uacce = true;
 		break;
 	case UACCE_MODE_NOIOMMU:
@@ -1167,18 +1179,15 @@ static int __init hisi_zip_init(void)
 		goto err_pci;
 	}
 
-	/*
-	 * Before JPB's SVA patch is enabled, SMMU/IOMMU cannot support PASID.
-	 * so we cannot register to crypto on UACCE mode.
-	 */
-	if (uacce_mode == UACCE_MODE_NOUACCE ||
-	    uacce_mode == UACCE_MODE_NOIOMMU) {
-		pr_debug("hisi_zip: register to crypto\n");
-		ret = hisi_zip_register_to_crypto();
-		if (ret < 0) {
-			pr_err("Failed to register driver to crypto.\n");
-			goto err_crypto;
-		}
+#ifndef CONFIG_IOMMU_SVA
+	if (uacce_mode == UACCE_MODE_UACCE)
+		return 0;
+#endif
+	pr_info("hisi_zip: register to crypto\n");
+	ret = hisi_zip_register_to_crypto();
+	if (ret < 0) {
+		pr_err("Failed to register driver to crypto.\n");
+		goto err_crypto;
 	}
 
 	return 0;
@@ -1193,9 +1202,12 @@ err_pci:
 
 static void __exit hisi_zip_exit(void)
 {
-	if (uacce_mode == UACCE_MODE_NOUACCE ||
-	    uacce_mode == UACCE_MODE_NOIOMMU)
+#ifndef CONFIG_IOMMU_SVA
+	if (uacce_mode != UACCE_MODE_UACCE)
 		hisi_zip_unregister_from_crypto();
+#else
+	hisi_zip_unregister_from_crypto();
+#endif
 	pci_unregister_driver(&hisi_zip_pci_driver);
 	hisi_zip_unregister_debugfs();
 }
