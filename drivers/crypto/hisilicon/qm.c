@@ -1815,18 +1815,22 @@ static int __hisi_qm_start(struct hisi_qm *qm)
 int hisi_qm_start(struct hisi_qm *qm)
 {
 	struct device *dev = &qm->pdev->dev;
+
 #ifdef CONFIG_CRYPTO_QM_UACCE
 	struct uacce_ops *ops = qm->uacce.ops;
-	unsigned long dus_page_nr = (PAGE_SIZE - 1 +
-		qm->sqe_size * QM_Q_DEPTH + sizeof(struct cqe) * QM_Q_DEPTH)
-		>> PAGE_SHIFT;
-	unsigned long dko_page_nr = (PAGE_SIZE - 1 +
-		QMC_ALIGN(sizeof(struct qm_eqe) * QM_Q_DEPTH) +
-		QMC_ALIGN(sizeof(struct qm_aeqe) * QM_Q_DEPTH) +
-		QMC_ALIGN(sizeof(struct qm_sqc) * qm->qp_num) +
-		QMC_ALIGN(sizeof(struct qm_cqc) * qm->qp_num) +
-		QMC_ALIGN(sizeof(struct qm_eqc)) +
-		QMC_ALIGN(sizeof(struct qm_aeqc))) >> PAGE_SHIFT;
+	unsigned long dus_page_nr = 0;
+	unsigned long dko_page_nr = 0;
+	if (qm->use_uacce) {
+		dus_page_nr = (PAGE_SIZE - 1 + qm->sqe_size * QM_Q_DEPTH +
+			       sizeof(struct cqe) * QM_Q_DEPTH) >> PAGE_SHIFT;
+		dko_page_nr = (PAGE_SIZE - 1 +
+			QMC_ALIGN(sizeof(struct qm_eqe) * QM_Q_DEPTH) +
+			QMC_ALIGN(sizeof(struct qm_aeqe) * QM_Q_DEPTH) +
+			QMC_ALIGN(sizeof(struct qm_sqc) * qm->qp_num) +
+			QMC_ALIGN(sizeof(struct qm_cqc) * qm->qp_num) +
+			QMC_ALIGN(sizeof(struct qm_eqc)) +
+			QMC_ALIGN(sizeof(struct qm_aeqc))) >> PAGE_SHIFT;
+	}
 #endif
 
 	dev_dbg(dev, "qm start with %d queue pairs\n", qm->qp_num);
@@ -1836,13 +1840,13 @@ int hisi_qm_start(struct hisi_qm *qm)
 
 	/* reset qfr definition */
 #ifdef CONFIG_CRYPTO_QM_UACCE
-	if (qm->use_dma_api) {
+	if (qm->use_uacce && qm->use_dma_api) {
 		ops->qf_pg_start[UACCE_QFRT_MMIO] = 0;
 		ops->qf_pg_start[UACCE_QFRT_DKO]  = UACCE_QFR_NA;
 		ops->qf_pg_start[UACCE_QFRT_DUS]  = QM_DOORBELL_PAGE_NR;
 		ops->qf_pg_start[UACCE_QFRT_SS]   = QM_DOORBELL_PAGE_NR +
 						    dus_page_nr;
-	} else {
+	} else if (qm->use_uacce) {
 		ops->qf_pg_start[UACCE_QFRT_MMIO] = 0;
 		ops->qf_pg_start[UACCE_QFRT_DKO]  = QM_DOORBELL_PAGE_NR;
 		ops->qf_pg_start[UACCE_QFRT_DUS]  = QM_DOORBELL_PAGE_NR +
