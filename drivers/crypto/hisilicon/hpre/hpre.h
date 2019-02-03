@@ -5,24 +5,21 @@
 #include <linux/list.h>
 #include "../qm.h"
 
-#define HPRE_SQE_SIZE			64
+#define HPRE_SQE_SIZE			sizeof(struct hpre_sqe)
 #define HPRE_SQ_SIZE			(HPRE_SQE_SIZE * QM_Q_DEPTH)
 #define QM_CQ_SIZE			(QM_CQE_SIZE * QM_Q_DEPTH)
 #define HPRE_PF_DEF_Q_NUM		64
 #define HPRE_PF_DEF_Q_BASE		0
 
-struct hisi_hpre_ctrl;
+struct hpre_ctrl;
 
-struct hisi_hpre {
+struct hpre {
 	struct hisi_qm qm;
 	struct list_head list;
-	struct hisi_hpre_ctrl *ctrl;
-#ifdef CONFIG_CRYPTO_DEV_HISI_SPIMDEV
-	struct vfio_spimdev *spimdev;
-#endif
+	struct hpre_ctrl *ctrl;
 };
 
-enum hisi_hpre_alg_type {
+enum hpre_alg_type {
 	HPRE_ALG_NC_NCRT = 0x0,
 	HPRE_ALG_NC_CRT = 0x1,
 	HPRE_ALG_KG_STD = 0x2,
@@ -36,7 +33,7 @@ enum hisi_hpre_alg_type {
 	HPRE_ALG_COPRIME = 0xA
 };
 
-struct hisi_hpre_sqe {
+struct hpre_sqe {
 	__u32 alg	: 5;
 
 	/* error type */
@@ -58,8 +55,7 @@ struct hisi_hpre_sqe {
 	__u32 rsvd1[7];
 };
 
-extern struct list_head hisi_hpre_list;
-
+extern struct hpre *find_hpre_device(int node);
 extern int hpre_algs_register(void);
 extern void hpre_algs_unregister(void);
 

@@ -66,7 +66,7 @@ struct hpre_ctx {
 struct hpre_asym_request {
 	char *src_align;
 	char *dst_align;
-	struct hisi_hpre_sqe req;
+	struct hpre_sqe req;
 	struct hpre_ctx *ctx;
 	union {
 		struct akcipher_request *rsa;
@@ -92,27 +92,6 @@ void hpre_bn_format(unsigned char *buf, int len)
 		else
 			buf[j] = 0;
 	}
-}
-
-static struct hisi_hpre *find_hpre_device(int node)
-{
-	struct hisi_hpre *hisi_hpre, *ret = NULL;
-	struct device *dev;
-	int min_distance = 100;
-	int dev_node = 0;
-
-	list_for_each_entry(hisi_hpre, &hisi_hpre_list, list) {
-		dev = &hisi_hpre->qm.pdev->dev;
-#ifdef CONFIG_NUMA
-		dev_node = dev->numa_node;
-#endif
-		if (node_distance(dev_node, node) < min_distance) {
-			ret = hisi_hpre;
-			min_distance = node_distance(dev_node, node);
-		}
-	}
-
-	return ret;
 }
 
 static int hpre_alloc_req_id(struct hpre_ctx *ctx)
@@ -170,7 +149,7 @@ static void hpre_rm_req_from_ctx(struct hpre_asym_request *hpre_req)
 static struct hisi_qp *hpre_get_qp(void)
 {
 	struct hisi_qp *qp = NULL;
-	struct hisi_hpre *hpre;
+	struct hpre *hpre;
 	int ret;
 
 	/* find the proper hpre device */
@@ -195,10 +174,10 @@ static struct hisi_qp *hpre_get_qp(void)
 }
 
 static int _hw_data_init(struct hpre_asym_request *hpre_req,
-			struct scatterlist *data, unsigned int len,
-			int is_src)
+			 struct scatterlist *data, unsigned int len,
+			 int is_src)
 {
-	struct hisi_hpre_sqe *msg = &hpre_req->req;
+	struct hpre_sqe *msg = &hpre_req->req;
 	struct hpre_ctx *ctx = hpre_req->ctx;
 	struct device *dev = &GET_DEV(ctx);
 	enum dma_data_direction dma_dir;
@@ -214,7 +193,7 @@ static int _hw_data_init(struct hpre_asym_request *hpre_req,
 			dma_dir = DMA_FROM_DEVICE;
 		}
 		tmp = dma_map_single(dev, sg_virt(data),
-				len, dma_dir);
+				     len, dma_dir);
 		if (unlikely(dma_mapping_error(dev, tmp))) {
 			dev_err(dev, "\ndma map data err!");
 			return -ENOMEM;
@@ -246,12 +225,12 @@ static int _hw_data_init(struct hpre_asym_request *hpre_req,
 }
 
 static void _hw_data_clr_all(struct hpre_ctx *ctx,
-			struct hpre_asym_request *req,
-			struct scatterlist *dst, struct scatterlist *src)
+			     struct hpre_asym_request *req,
+			     struct scatterlist *dst, struct scatterlist *src)
 {
 	dma_addr_t tmp;
 	struct device *dev = &GET_DEV(ctx);
-	struct hisi_hpre_sqe *sqe = &req->req;
+	struct hpre_sqe *sqe = &req->req;
 
 	tmp = BITS64_MERGE(sqe->low_in, sqe->hi_in);
 	if (src && tmp) {
@@ -266,14 +245,14 @@ static void _hw_data_clr_all(struct hpre_ctx *ctx,
 	if (req->dst_align && tmp) {
 		if (dst)
 			scatterwalk_map_and_copy(req->dst_align, dst, 0,
-					 ctx->key_sz, 1);
+						 ctx->key_sz, 1);
 		dma_free_coherent(dev, ctx->key_sz, req->dst_align, tmp);
 	} else {
 		dma_unmap_single(dev, tmp, ctx->key_sz, DMA_FROM_DEVICE);
 	}
 }
 
-static int _alg_res_post_hf(struct hpre_ctx *ctx, struct hisi_hpre_sqe *sqe,
+static int _alg_res_post_hf(struct hpre_ctx *ctx, struct hpre_sqe *sqe,
 			    void **kreq)
 {
 	struct hpre_asym_request *req;
@@ -298,7 +277,7 @@ static int _ctx_init(struct hpre_ctx *ctx, struct hisi_qp *qp, int qlen)
 
 	spin_lock_init(&ctx->req_lock);
 	ctx->req_bitmap = kcalloc(BITS_TO_LONGS(qlen), sizeof(long),
-			GFP_KERNEL);
+				  GFP_KERNEL);
 	if (!ctx->req_bitmap)
 		return ret;
 	ctx->qp = qp;
@@ -340,7 +319,7 @@ static void _dh_cb(struct hpre_ctx *ctx, void *resp)
 
 void hpre_alg_cb(struct hisi_qp *qp, void *_resp)
 {
-	struct hisi_hpre_sqe *sqe = _resp;
+	struct hpre_sqe *sqe = _resp;
 	struct hpre_asym_request *areq;
 	struct hpre_ctx *ctx = qp->qp_ctx;
 	int id = (int)sqe->tag;
@@ -368,7 +347,7 @@ static int hpre_dh_compute_value(struct kpp_request *req)
 	struct hpre_ctx *ctx = kpp_tfm_ctx(tfm);
 	struct hpre_asym_request *hpre_req =
 			PTR_ALIGN(kpp_request_ctx(req), 64);
-	struct hisi_hpre_sqe *msg = &hpre_req->req;
+	struct hpre_sqe *msg = &hpre_req->req;
 	int ret = -ENOMEM, ctr = 0, req_id;
 
 	if (unlikely(!ctx->dh.xa_p))
@@ -492,7 +471,7 @@ static void hpre_dh_clear_ctx(struct hpre_ctx *ctx, int is_exit)
 }
 
 static int hpre_dh_set_secret(struct crypto_kpp *tfm, const void *buf,
-			     unsigned int len)
+			      unsigned int len)
 {
 	struct hpre_ctx *ctx = kpp_tfm_ctx(tfm);
 	struct dh params;
@@ -509,7 +488,7 @@ static int hpre_dh_set_secret(struct crypto_kpp *tfm, const void *buf,
 		goto err_clear_ctx;
 
 	memcpy(ctx->dh.xa_p + (ctx->key_sz - params.key_size), params.key,
-		params.key_size);
+	       params.key_size);
 	hpre_bn_format((unsigned char *)ctx->dh.xa_p, ctx->key_sz);
 
 	return 0;
@@ -576,7 +555,7 @@ static int hpre_rsa_enc(struct akcipher_request *req)
 	struct hpre_ctx *ctx = akcipher_tfm_ctx(tfm);
 	struct hpre_asym_request *hpre_req =
 			PTR_ALIGN(akcipher_request_ctx(req), 64);
-	struct hisi_hpre_sqe *msg = &hpre_req->req;
+	struct hpre_sqe *msg = &hpre_req->req;
 	int ret = -ENOMEM, ctr = 0, req_id;
 
 	if (ctx->key_sz == 64 && ctx->rsa.soft_tfm) {
@@ -634,7 +613,7 @@ static int hpre_rsa_dec(struct akcipher_request *req)
 	struct hpre_ctx *ctx = akcipher_tfm_ctx(tfm);
 	struct hpre_asym_request *hpre_req =
 			PTR_ALIGN(akcipher_request_ctx(req), 64);
-	struct hisi_hpre_sqe *msg = &hpre_req->req;
+	struct hpre_sqe *msg = &hpre_req->req;
 	int ret = -ENOMEM, ctr = 0, req_id;
 
 	if (ctx->key_sz == 64 && ctx->rsa.soft_tfm) {
@@ -711,17 +690,15 @@ static int hpre_rsa_set_n(struct hpre_ctx *ctx, const char *value,
 	if (hpre_rsa_key_size_check(ctx->key_sz))
 		goto err;
 	if (private) {
-		ctx->rsa.prikey = dma_zalloc_coherent(&GET_DEV(ctx),
-						  vlen << 1,
-						  &ctx->rsa.dma_prikey,
-						  GFP_KERNEL);
+		ctx->rsa.prikey = dma_zalloc_coherent(&GET_DEV(ctx), vlen << 1,
+						      &ctx->rsa.dma_prikey,
+						      GFP_KERNEL);
 		if (!ctx->rsa.prikey)
 			return -ENOMEM;
 	}
-	ctx->rsa.pubkey = dma_zalloc_coherent(&GET_DEV(ctx),
-					  vlen << 1,
-					  &ctx->rsa.dma_pubkey,
-					  GFP_KERNEL);
+	ctx->rsa.pubkey = dma_zalloc_coherent(&GET_DEV(ctx), vlen << 1,
+					      &ctx->rsa.dma_pubkey,
+					      GFP_KERNEL);
 	if (!ctx->rsa.pubkey)
 		return -ENOMEM;
 	memcpy(ctx->rsa.pubkey + vlen, ptr, vlen);
@@ -796,8 +773,8 @@ static int hpre_rsa_setkey_crt(struct hpre_ctx *ctx, struct rsa_key *rsa_key)
 	int ret = -EINVAL;
 
 	ctx->rsa.crt_prikey = dma_zalloc_coherent(dev, half_key_sz * 5,
-					      &ctx->rsa.dma_crt_prikey,
-					      GFP_KERNEL);
+						  &ctx->rsa.dma_crt_prikey,
+						  GFP_KERNEL);
 	if (!ctx->rsa.crt_prikey)
 		return -ENOMEM;
 
