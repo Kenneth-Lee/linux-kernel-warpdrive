@@ -128,6 +128,7 @@
 
 #define QM_CACHE_WB_START		0x204
 #define QM_CACHE_WB_DONE		0x208
+#define QM_V2_BASE_OFFSET		0x1000
 
 #define QM_MK_CQC_DW3_V1(hop_num, pg_sz, buf_sz, sqe_sz) \
 	(((hop_num) << QM_CQ_HOP_NUM_SHIFT)	| \
@@ -1283,7 +1284,7 @@ static int hisi_qm_get_available_instances(struct uacce *uacce)
 	int i, ret;
 
 	write_lock(&qm->qps_lock);
-	for (i = 0, ret = 0; i< qm->qp_num; i++)
+	for (i = 0, ret = 0; i < qm->qp_num; i++)
 		if (!qm->qp_array[i])
 			ret++;
 	write_unlock(&qm->qps_lock);
@@ -1351,6 +1352,7 @@ static int hisi_qm_uacce_mmap(struct uacce_queue *q,
 	size_t sz = vma->vm_end - vma->vm_start;
 	struct pci_dev *pdev = qm->pdev;
 	struct device *dev = &pdev->dev;
+	unsigned long long mmio_base;
 	unsigned long vm_pgoff;
 	int ret;
 
@@ -1358,12 +1360,16 @@ static int hisi_qm_uacce_mmap(struct uacce_queue *q,
 	case UACCE_QFRT_MMIO:
 		WARN_ON(sz > PAGE_SIZE);
 		vma->vm_flags |= VM_IO;
+		if (qm->ver == QM_HW_V1)
+			mmio_base = qm->phys_base;
+		else
+			mmio_base = qm->phys_base + QM_V2_BASE_OFFSET;
 		/*
 		 * Warning: This is not safe as multiple queues use the same
 		 * doorbell, v1 hardware interface problem. will fix it in v2
 		 */
 		return remap_pfn_range(vma, vma->vm_start,
-				       qm->phys_base >> PAGE_SHIFT,
+				       mmio_base >> PAGE_SHIFT,
 				       sz, pgprot_noncached(vma->vm_page_prot));
 	case UACCE_QFRT_DUS:
 		if (qm->use_dma_api) {
@@ -1500,16 +1506,25 @@ static int qm_register_uacce(struct hisi_qm *qm)
 		 * by ourself with the UACCE_DEV_DRVMAP_DUS flag.
 		 */
 		if (qm->use_sva) {
-			uacce->ops->flags = UACCE_DEV_SVA | UACCE_DEV_DRVMAP_DUS;
+			uacce->ops->flags = UACCE_DEV_SVA |
+					    UACCE_DEV_DRVMAP_DUS;
 			uacce->ops->api_ver = HISI_QM_API_VER_BASE;
 		} else {
 
-			uacce->ops->flags = UACCE_DEV_NOIOMMU | UACCE_DEV_DRVMAP_DUS;
-			uacce->ops->api_ver = HISI_QM_API_VER_BASE
-					      UACCE_API_VER_NOIOMMU_SUBFIX;
+			uacce->ops->flags = UACCE_DEV_NOIOMMU |
+					    UACCE_DEV_DRVMAP_DUS;
+			if (qm->ver == QM_HW_V1)
+				uacce->ops->api_ver = HISI_QM_API_VER_BASE
+						  UACCE_API_VER_NOIOMMU_SUBFIX;
+			else
+				uacce->ops->api_ver = HISI_QM_API_VER2_BASE
+						UACCE_API_VER_NOIOMMU_SUBFIX;
 		}
 	} else {
-		uacce->ops->api_ver = HISI_QM_API_VER_BASE;
+		if (qm->ver == QM_HW_V1)
+			uacce->ops->api_ver = HISI_QM_API_VER_BASE;
+		else
+			uacce->ops->api_ver = HISI_QM_API_VER2_BASE;
 	}
 
 	for (i = 0; i < UACCE_QFRT_MAX; i++)
@@ -1701,7 +1716,6 @@ int hisi_qm_set_vft(struct hisi_qm *qm, u32 fun_num, u32 base,
 {
 	return qm_set_sqc_cqc_vft(qm, fun_num, base, number);
 }
-
 EXPORT_SYMBOL_GPL(hisi_qm_set_vft);
 
 static int __hisi_qm_start(struct hisi_qm *qm)
@@ -1762,7 +1776,7 @@ static int __hisi_qm_start(struct hisi_qm *qm)
 #ifdef CONFIG_CRYPTO_QM_UACCE
 	/* check if the size exceed the DKO boundary */
 	if (qm->use_uacce && !qm->use_dma_api) {
-		WARN_ON(qm->uacce.ops->qf_pg_start[UACCE_QFRT_DKO] == 
+		WARN_ON(qm->uacce.ops->qf_pg_start[UACCE_QFRT_DKO] ==
 		    UACCE_QFR_NA);
 		dko_size = qm->uacce.ops->qf_pg_start[UACCE_QFRT_DUS] -
 			   qm->uacce.ops->qf_pg_start[UACCE_QFRT_DKO];
@@ -1820,6 +1834,7 @@ int hisi_qm_start(struct hisi_qm *qm)
 	struct uacce_ops *ops = qm->uacce.ops;
 	unsigned long dus_page_nr = 0;
 	unsigned long dko_page_nr = 0;
+
 	if (qm->use_uacce) {
 		dus_page_nr = (PAGE_SIZE - 1 + qm->sqe_size * QM_Q_DEPTH +
 			       sizeof(struct cqe) * QM_Q_DEPTH) >> PAGE_SHIFT;
@@ -1850,7 +1865,7 @@ int hisi_qm_start(struct hisi_qm *qm)
 		ops->qf_pg_start[UACCE_QFRT_MMIO] = 0;
 		ops->qf_pg_start[UACCE_QFRT_DKO]  = QM_DOORBELL_PAGE_NR;
 		ops->qf_pg_start[UACCE_QFRT_DUS]  = QM_DOORBELL_PAGE_NR +
-		 				    dko_page_nr;
+						    dko_page_nr;
 		ops->qf_pg_start[UACCE_QFRT_SS]   = QM_DOORBELL_PAGE_NR +
 						    dko_page_nr +
 						    dus_page_nr;
