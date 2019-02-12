@@ -7,16 +7,17 @@
  * queue by the user application.
  */
 
+#include <asm/page.h>
 #include <linux/dma-mapping.h>
+#include <linux/kthread.h>
 #include <linux/module.h>
+#include <linux/mutex.h>
+#include <linux/platform_device.h>
 #include <linux/printk.h>
 #include <linux/slab.h>
-#include <linux/platform_device.h>
-#include <linux/kthread.h>
-#include <linux/mutex.h>
-#include <asm/page.h>
 #include <linux/uacce.h>
 #include <linux/uaccess.h>
+
 #include "wd_dummy_usr_if.h"
 #include "dummy_hw_usr_if.h"
 
@@ -303,7 +304,6 @@ static int dummy_wd_probe(struct platform_device *pdev)
 		return -EINVAL;
 	}
 
-	pdev->dev.dma_ops = &dma_direct_ops;
 	ret = dma_set_coherent_mask(&pdev->dev, DMA_BIT_MASK(64));
 	if (ret < 0)
 		return -EINVAL;
