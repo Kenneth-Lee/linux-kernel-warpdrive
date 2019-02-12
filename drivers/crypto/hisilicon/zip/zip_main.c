@@ -558,11 +558,18 @@ static void hisi_zip_debugfs_exit(struct hisi_zip *hisi_zip)
 	debugfs_remove_recursive(qm->debug.debug_root);
 }
 
+static void hisi_zip_hw_error_init(struct hisi_zip *hisi_zip)
+{
+	hisi_qm_hw_error_init(&hisi_zip->qm, QM_BASE_CE,
+			      QM_BASE_NFE | QM_ACC_WB_NOT_READY_TIMEOUT, 0,
+			      QM_DB_RANDOM_INVALID);
+	hisi_zip_hw_error_set_state(hisi_zip, true);
+}
+
 static int hisi_zip_pf_probe_init(struct hisi_zip *hisi_zip)
 {
 	struct hisi_qm *qm = &hisi_zip->qm;
 	struct hisi_zip_ctrl *ctrl;
-	u32 nfe_flag;
 
 	ctrl = devm_kzalloc(&qm->pdev->dev, sizeof(*ctrl), GFP_KERNEL);
 	if (!ctrl)
@@ -585,11 +592,7 @@ static int hisi_zip_pf_probe_init(struct hisi_zip *hisi_zip)
 	}
 
 	hisi_zip_set_user_domain_and_cache(hisi_zip);
-
-	nfe_flag = QM_BASE_NFE | QM_ACC_WB_NOT_READY_TIMEOUT;
-	hisi_qm_hw_error_init(qm, QM_BASE_CE, nfe_flag, 0,
-			      QM_DB_RANDOM_INVALID);
-	hisi_zip_hw_error_set_state(hisi_zip, true);
+	hisi_zip_hw_error_init(hisi_zip);
 
 	return 0;
 }
@@ -984,6 +987,7 @@ static int hisi_zip_controller_reset_done(struct hisi_zip *hisi_zip)
 	hisi_qm_clear_queues(qm);
 
 	hisi_zip_set_user_domain_and_cache(hisi_zip);
+	hisi_zip_hw_error_init(hisi_zip);
 
 	ret = hisi_qm_start(qm);
 	if (ret) {
