@@ -849,7 +849,7 @@ static int qm_regs_show(struct seq_file *s, void *unused)
 
 	while (regs->reg_name) {
 		val = readl(qm->io_base + regs->reg_offset);
-		seq_printf(s, "%s: %16x\n", regs->reg_name, val);
+		seq_printf(s, "%s= 0x%08x\n", regs->reg_name, val);
 		regs++;
 	}
 
