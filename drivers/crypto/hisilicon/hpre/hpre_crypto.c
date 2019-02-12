@@ -201,7 +201,7 @@ static int _hw_data_init(struct hpre_asym_request *hpre_req,
 	} else {
 		int shift = ctx->key_sz - len;
 
-		ptr = dma_zalloc_coherent(dev, ctx->key_sz, &tmp, GFP_KERNEL);
+		ptr = dma_alloc_coherent(dev, ctx->key_sz, &tmp, GFP_KERNEL);
 		if (unlikely(!ptr)) {
 			dev_err(dev, "\ndma alloc data err!");
 			return -ENOMEM;
@@ -430,8 +430,8 @@ static int hpre_dh_set_params(struct hpre_ctx *ctx, struct dh *params)
 		return -EINVAL;
 
 	sz = ctx->key_sz = params->p_size;
-	ctx->dh.xa_p = dma_zalloc_coherent(dev, sz << 1,
-				&ctx->dh.dma_xa_p, GFP_KERNEL);
+	ctx->dh.xa_p = dma_alloc_coherent(dev, sz << 1,
+					  &ctx->dh.dma_xa_p, GFP_KERNEL);
 	if (!ctx->dh.xa_p)
 		return -ENOMEM;
 	memcpy(ctx->dh.xa_p + sz, params->p, sz);
@@ -443,7 +443,7 @@ static int hpre_dh_set_params(struct hpre_ctx *ctx, struct dh *params)
 		return 0;
 	}
 
-	ctx->dh.g = dma_zalloc_coherent(dev, sz, &ctx->dh.dma_g, GFP_KERNEL);
+	ctx->dh.g = dma_alloc_coherent(dev, sz, &ctx->dh.dma_g, GFP_KERNEL);
 	if (!ctx->dh.g)
 		return -ENOMEM;
 	memcpy(ctx->dh.g + (sz - params->g_size), params->g,
@@ -690,15 +690,14 @@ static int hpre_rsa_set_n(struct hpre_ctx *ctx, const char *value,
 	if (hpre_rsa_key_size_check(ctx->key_sz))
 		goto err;
 	if (private) {
-		ctx->rsa.prikey = dma_zalloc_coherent(&GET_DEV(ctx), vlen << 1,
-						      &ctx->rsa.dma_prikey,
-						      GFP_KERNEL);
+		ctx->rsa.prikey = dma_alloc_coherent(&GET_DEV(ctx), vlen << 1,
+						     &ctx->rsa.dma_prikey,
+						     GFP_KERNEL);
 		if (!ctx->rsa.prikey)
 			return -ENOMEM;
 	}
-	ctx->rsa.pubkey = dma_zalloc_coherent(&GET_DEV(ctx), vlen << 1,
-					      &ctx->rsa.dma_pubkey,
-					      GFP_KERNEL);
+	ctx->rsa.pubkey = dma_alloc_coherent(&GET_DEV(ctx), vlen << 1,
+					     &ctx->rsa.dma_pubkey, GFP_KERNEL);
 	if (!ctx->rsa.pubkey)
 		return -ENOMEM;
 	memcpy(ctx->rsa.pubkey + vlen, ptr, vlen);
@@ -772,9 +771,9 @@ static int hpre_rsa_setkey_crt(struct hpre_ctx *ctx, struct rsa_key *rsa_key)
 	unsigned int len;
 	int ret = -EINVAL;
 
-	ctx->rsa.crt_prikey = dma_zalloc_coherent(dev, half_key_sz * 5,
-						  &ctx->rsa.dma_crt_prikey,
-						  GFP_KERNEL);
+	ctx->rsa.crt_prikey = dma_alloc_coherent(dev, half_key_sz * 5,
+						 &ctx->rsa.dma_crt_prikey,
+						 GFP_KERNEL);
 	if (!ctx->rsa.crt_prikey)
 		return -ENOMEM;
 
