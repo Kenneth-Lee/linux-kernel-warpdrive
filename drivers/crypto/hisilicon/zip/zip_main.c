@@ -961,7 +961,7 @@ static int hisi_zip_soft_reset(struct hisi_zip *hisi_zip)
 	if (ACPI_HANDLE(dev)) {
 		acpi_status s;
 
-		s = acpi_evaluate_object(ACPI_HANDLE(dev), "_RST", NULL, NULL);
+		s = acpi_evaluate_object(ACPI_HANDLE(dev), "ZRST", NULL, NULL);
 		if (ACPI_FAILURE(s)) {
 			dev_err(dev, "Controller reset fails\n");
 			return -EIO;
