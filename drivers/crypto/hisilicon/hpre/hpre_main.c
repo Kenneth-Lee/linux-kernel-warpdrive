@@ -25,8 +25,10 @@
 #define HPRE_VFG_AXQOS			0x30100c
 #define HPRE_VFG_AXCACHE		0x301010
 #define HPRE_RDCHN_INI_CFG		0x301014
+#define HPRE_AWUSR_FP_CFG		0x301018
 #define HPRE_BD_ENDIAN			0x301020
 #define HPRE_ECC_BYPASS			0x301024
+#define HPRE_RAS_WIDTH_CFG		0x301028
 #define HPRE_POISON_BYPASS		0x30102c
 #define HPRE_BD_ARUSR_CFG		0x301030
 #define HPRE_BD_AWUSR_CFG		0x301034
@@ -34,14 +36,21 @@
 #define HPRE_DATA_RUSER_CFG		0x30103c
 #define HPRE_DATA_WUSER_CFG		0x301040
 #define HPRE_INT_MASK			0x301400
+#define HPRE_INT_STATUS			0x301800
 #define HPRE_CORE_INT_ENABLE		0
 #define HPRE_CORE_INT_DISABLE		0x003fffff
 #define HPRE_RAS_ECC_1BIT_TH		0x30140c
 #define HPRE_RDCHN_INI_ST		0x301a00
-#define HPRE_CLUSTER_BASE		0x302000
-#define HPRE_CORE_ENB			0x302004
-#define HPRE_CORE_INI_CFG		0x302020
-#define HPRE_CORE_INI_STATUS		0x302080
+#define HPRE_CLSTR_BASE			0x302000
+#define HPRE_CORE_EN_OFFSET		0x04
+#define HPRE_CORE_INI_CFG_OFFSET	0x20
+#define HPRE_CORE_INI_STATUS_OFFSET	0x80
+#define HPRE_CORE_HTBT_WARN_OFFSET	0x8c
+#define HPRE_CORE_IS_SCHD_OFFSET	0x90
+
+#define HPRE_CORE_ENB		(HPRE_CLSTR_BASE + HPRE_CORE_EN_OFFSET)
+#define HPRE_CORE_INI_CFG	(HPRE_CLSTR_BASE + HPRE_CORE_INI_CFG_OFFSET)
+#define HPRE_CORE_INI_STATUS (HPRE_CLSTR_BASE + HPRE_CORE_INI_STATUS_OFFSET)
 #define HPRE_HAC_ECC1_CNT		0x301a04
 #define HPRE_HAC_ECC2_CNT		0x301a08
 #define HPRE_HAC_INT_ECC1		BIT(0)
@@ -52,9 +61,22 @@
 #define MASTER_TRANS_RETURN_RW		3
 #define HPRE_MASTER_TRANS_RETURN	0x301500
 #define HPRE_MASTER_GLOBAL_CTRL		0x300000
-#define HPRE_CLUSTER_ADDR_INTRVL	0x1000
+#define HPRE_CLSTR_ADDR_INTRVL		0x1000
 #define HPRE_CLUSTER_INQURY		0x100
-#define HPRE_CLUSTER_INQURY_RSLT	0x104
+#define HPRE_CLSTR_ADDR_INQRY_RSLT	0x104
+#define HPRE_TIMEOUT_ABNML_BIT		6
+#define HPRE_PASID_EN_BIT		9
+#define _REG_RD_INTVRL_US		10
+#define _REG_RD_TMOUT_US		1000
+#define HPRE_DBGFS_VAL_MAX_LEN		20
+#define HPRE_PCI_DEVICE_ID		0xa258
+#define HPRE_PCI_VF_DEVICE_ID		0xa259
+#define HPRE_ADDR(offset)		(qm->io_base + (offset))
+#define _QM_USR_CFG_MASK		0xfffffffe
+#define _QM_AXI_CFG_MASK		0xffff
+#define _QM_VFG_AX_MASK			0xff
+#define _BD_USR_MASK			0x3
+#define _CLUSTER_CORE_MASK		0xf
 
 enum {
 	HPRE_CORE0,
@@ -77,10 +99,11 @@ static DEFINE_MUTEX(hpre_list_lock);
 static const char hpre_name[] = "hisi_hpre";
 static struct dentry *hpre_debugfs_root;
 static const struct pci_device_id hpre_dev_ids[] = {
-	{ PCI_DEVICE(PCI_VENDOR_ID_HUAWEI, 0xa258) },
-	{ PCI_DEVICE(PCI_VENDOR_ID_HUAWEI, 0xa259) },
+	{ PCI_DEVICE(PCI_VENDOR_ID_HUAWEI, HPRE_PCI_DEVICE_ID) },
+	{ PCI_DEVICE(PCI_VENDOR_ID_HUAWEI, HPRE_PCI_VF_DEVICE_ID) },
 	{ 0, }
 };
+
 struct hpre_hw_error {
 	u32 int_msk;
 	const char *msg;
@@ -140,36 +163,38 @@ struct hpre_ctrl {
 
 static const u64 hpre_cluster_offsets[] = {
 	[HPRE_CLUSTER0] =
-		HPRE_CLUSTER_BASE + HPRE_CLUSTER0 * HPRE_CLUSTER_ADDR_INTRVL,
+		HPRE_CLSTR_BASE + HPRE_CLUSTER0 * HPRE_CLSTR_ADDR_INTRVL,
 	[HPRE_CLUSTER1] =
-		HPRE_CLUSTER_BASE + HPRE_CLUSTER1 * HPRE_CLUSTER_ADDR_INTRVL,
+		HPRE_CLSTR_BASE + HPRE_CLUSTER1 * HPRE_CLSTR_ADDR_INTRVL,
 	[HPRE_CLUSTER2] =
-		HPRE_CLUSTER_BASE + HPRE_CLUSTER2 * HPRE_CLUSTER_ADDR_INTRVL,
+		HPRE_CLSTR_BASE + HPRE_CLUSTER2 * HPRE_CLSTR_ADDR_INTRVL,
 	[HPRE_CLUSTER3] =
-		HPRE_CLUSTER_BASE + HPRE_CLUSTER3 * HPRE_CLUSTER_ADDR_INTRVL,
+		HPRE_CLSTR_BASE + HPRE_CLUSTER3 * HPRE_CLSTR_ADDR_INTRVL,
 };
 
 static struct debugfs_reg32 hpre_cluster_dfx_regs[] = {
-	{"CORES_EN_STATUS          ",  0x04ull},
-	{"CORES_INI_CFG              ",  0x20ull},
-	{"CORES_INI_STATUS         ",  0x80ull},
-	{"CORES_HTBT_WARN         ",  0x8cull},
-	{"CORES_IS_SCHD               ",  0x90ull},
+	{"CORES_EN_STATUS          ",  HPRE_CORE_EN_OFFSET},
+	{"CORES_INI_CFG              ",  HPRE_CORE_INI_CFG_OFFSET},
+	{"CORES_INI_STATUS         ",  HPRE_CORE_INI_STATUS_OFFSET},
+	{"CORES_HTBT_WARN         ",  HPRE_CORE_HTBT_WARN_OFFSET},
+	{"CORES_IS_SCHD               ",  HPRE_CORE_IS_SCHD_OFFSET},
 };
 
 static struct debugfs_reg32 hpre_com_dfx_regs[] = {
-	{"READ_CLR_EN          ",  0x0ull},
-	{"AXQOS                      ",  0x0cull},
-	{"AWUSR_CFG              ",  0x18ull},
-	{"BD_ENDIAN               ",  0x20ull},
-	{"ECC_CHCK_CTRL       ",  0x24ull},
-	{"RAS_INT_WIDTH       ",  0x28ull},
-	{"POISON_BYPASS       ",  0x2cull},
-	{"BD_ARUSER               ",  0x30ull},
-	{"BD_AWUSER               ",  0x34ull},
-	{"DATA_ARUSER            ",  0x3cull},
-	{"DATA_AWUSER           ",  0x40ull},
-	{"INT_STATUS               ",  0x800ull},
+	{"READ_CLR_EN          ",  HPRE_CTRL_CNT_CLR_CE},
+	{"AXQOS                   ",  HPRE_VFG_AXQOS},
+	{"AWUSR_CFG              ",  HPRE_AWUSR_FP_CFG},
+	{"QM_ARUSR_MCFG1           ",  QM_ARUSER_M_CFG_1},
+	{"QM_AWUSR_MCFG1           ",  QM_AWUSER_M_CFG_1},
+	{"BD_ENDIAN               ",  HPRE_BD_ENDIAN},
+	{"ECC_CHCK_CTRL       ",  HPRE_ECC_BYPASS},
+	{"RAS_INT_WIDTH       ",  HPRE_RAS_WIDTH_CFG},
+	{"POISON_BYPASS       ",  HPRE_POISON_BYPASS},
+	{"BD_ARUSER               ",  HPRE_BD_ARUSR_CFG},
+	{"BD_AWUSER               ",  HPRE_BD_ARUSR_CFG},
+	{"DATA_ARUSER            ",  HPRE_DATA_RUSER_CFG},
+	{"DATA_AWUSER           ",  HPRE_DATA_WUSER_CFG},
+	{"INT_STATUS               ",  HPRE_INT_STATUS},
 };
 
 static int pf_q_num_set(const char *val, const struct kernel_param *kp)
@@ -181,7 +206,7 @@ static int pf_q_num_set(const char *val, const struct kernel_param *kp)
 
 	if (!val)
 		return -EINVAL;
-	pdev = pci_get_device(PCI_VENDOR_ID_HUAWEI, 0xa258, NULL);
+	pdev = pci_get_device(PCI_VENDOR_ID_HUAWEI, HPRE_PCI_DEVICE_ID, NULL);
 	if (unlikely(!pdev)) {
 		q_num = min_t(u32, HPRE_QUEUE_NUM_V1, HPRE_QUEUE_NUM_V2);
 		pr_info("No device found currently, suppose queue number is %d\n",
@@ -189,10 +214,10 @@ static int pf_q_num_set(const char *val, const struct kernel_param *kp)
 	} else {
 		rev_id = pdev->revision;
 		switch (rev_id) {
-		case 0x20:
+		case QM_HW_VER1_ID:
 			q_num = HPRE_QUEUE_NUM_V1;
 			break;
-		case 0x21:
+		case QM_HW_VER2_ID:
 			q_num = HPRE_QUEUE_NUM_V2;
 			break;
 		default:
@@ -200,7 +225,8 @@ static int pf_q_num_set(const char *val, const struct kernel_param *kp)
 		}
 	}
 
-	ret = kstrtou32(val, 10, &n);
+#define _TO_DECIMAL	10
+	ret = kstrtou32(val, _TO_DECIMAL, &n);
 	if (ret != 0 || n > q_num)
 		return -EINVAL;
 
@@ -234,9 +260,10 @@ static inline void hpre_remove_from_list(struct hpre *hpre)
 
 struct hpre *find_hpre_device(int node)
 {
+#define HPRE_NUMA_MIN_DISTANCE	100
 	struct hpre *hpre, *ret = NULL;
 	struct device *dev;
-	int min_distance = 100;
+	int min_distance = HPRE_NUMA_MIN_DISTANCE;
 	int dev_node = 0;
 
 	mutex_lock(&hpre_list_lock);
@@ -257,6 +284,18 @@ struct hpre *find_hpre_device(int node)
 	return ret;
 }
 
+static void hpre_pasid_enable(struct hisi_qm *qm)
+{
+	u32 val;
+
+	val = readl_relaxed(HPRE_ADDR(HPRE_DATA_RUSER_CFG));
+	val |= BIT(HPRE_PASID_EN_BIT);
+	writel_relaxed(val, HPRE_ADDR(HPRE_DATA_RUSER_CFG));
+	val = readl_relaxed(HPRE_ADDR(HPRE_DATA_WUSER_CFG));
+	val |= BIT(HPRE_PASID_EN_BIT);
+	writel_relaxed(val, HPRE_ADDR(HPRE_DATA_WUSER_CFG));
+}
+
 static int hpre_set_user_domain_and_cache(struct hpre *hpre)
 {
 	int ret, i;
@@ -264,18 +303,17 @@ static int hpre_set_user_domain_and_cache(struct hpre *hpre)
 	unsigned long offset;
 	struct hisi_qm *qm = &hpre->qm;
 
-#define HPRE_ADDR(offset) (qm->io_base + (offset))
-	writel(0xfffffffe, HPRE_ADDR(QM_ARUSER_M_CFG_ENABLE));
-	writel(0xfffffffe, HPRE_ADDR(QM_AWUSER_M_CFG_ENABLE));
-	writel_relaxed(0xffff, HPRE_ADDR(QM_AXI_M_CFG));
+	writel(_QM_USR_CFG_MASK, HPRE_ADDR(QM_ARUSER_M_CFG_ENABLE));
+	writel(_QM_USR_CFG_MASK, HPRE_ADDR(QM_AWUSER_M_CFG_ENABLE));
+	writel_relaxed(_QM_AXI_CFG_MASK, HPRE_ADDR(QM_AXI_M_CFG));
 
 	/* HPRE need more time, we close this interupt */
 	val = readl_relaxed(HPRE_ADDR(HPRE_QM_ABNML_INT_MASK));
-	val |= (1 << 6);
+	val |= BIT(HPRE_TIMEOUT_ABNML_BIT);
 	writel_relaxed(val, HPRE_ADDR(HPRE_QM_ABNML_INT_MASK));
 
 	writel(0x1, HPRE_ADDR(HPRE_TYPES_ENB));
-	writel(0xff, HPRE_ADDR(HPRE_VFG_AXCACHE));
+	writel(_QM_VFG_AX_MASK, HPRE_ADDR(HPRE_VFG_AXCACHE));
 	writel(0x0, HPRE_ADDR(HPRE_BD_ENDIAN));
 	writel(0x0, HPRE_ADDR(HPRE_INT_MASK));
 	writel(0x0, HPRE_ADDR(HPRE_RAS_ECC_1BIT_TH));
@@ -284,33 +322,27 @@ static int hpre_set_user_domain_and_cache(struct hpre *hpre)
 	writel(0x0, HPRE_ADDR(HPRE_ECC_BYPASS));
 
 	/* Enable data buffer pasid */
-	if (qm->use_sva) {
-		val = readl_relaxed(HPRE_ADDR(HPRE_DATA_RUSER_CFG));
-		val |= (1 << 9);
-		writel_relaxed(val, HPRE_ADDR(HPRE_DATA_RUSER_CFG));
-		val = readl_relaxed(HPRE_ADDR(HPRE_DATA_WUSER_CFG));
-		val |= (1 << 9);
-		writel_relaxed(val, HPRE_ADDR(HPRE_DATA_WUSER_CFG));
-	}
-	writel(0x3, HPRE_ADDR(HPRE_BD_ARUSR_CFG));
-	writel(0x3, HPRE_ADDR(HPRE_BD_AWUSR_CFG));
+	if (qm->use_sva)
+		hpre_pasid_enable(qm);
+
+	writel(_BD_USR_MASK, HPRE_ADDR(HPRE_BD_ARUSR_CFG));
+	writel(_BD_USR_MASK, HPRE_ADDR(HPRE_BD_AWUSR_CFG));
 	writel(0x1, HPRE_ADDR(HPRE_RDCHN_INI_CFG));
-	ret = readl_relaxed_poll_timeout(HPRE_ADDR(HPRE_RDCHN_INI_ST),
-					 val, val & BIT(0), 10, 1000);
+	ret = readl_relaxed_poll_timeout(HPRE_ADDR(HPRE_RDCHN_INI_ST), val,
+			val & BIT(0), _REG_RD_INTVRL_US, _REG_RD_TMOUT_US);
 	if (ret) {
 		pr_err("\nHPRE:INI ST TIMEOUT");
 		return -ETIMEDOUT;
 	}
 	for (i = 0; i < HPRE_CLUSTERS_NUM; i++) {
-		offset = i * HPRE_CLUSTER_ADDR_INTRVL;
+		offset = i * HPRE_CLSTR_ADDR_INTRVL;
 
 		/* clusters initiating */
-		writel(0xf, HPRE_ADDR(offset + HPRE_CORE_ENB));
+		writel(_CLUSTER_CORE_MASK, HPRE_ADDR(offset + HPRE_CORE_ENB));
 		writel(0x1, HPRE_ADDR(offset + HPRE_CORE_INI_CFG));
 		ret = readl_relaxed_poll_timeout(HPRE_ADDR(offset +
-						 HPRE_CORE_INI_STATUS),
-						 val, ((val & 0xf) == 0xf),
-						 10, 1000);
+		     HPRE_CORE_INI_STATUS), val, ((val & _CLUSTER_CORE_MASK) ==
+		     _CLUSTER_CORE_MASK), _REG_RD_INTVRL_US, _REG_RD_TMOUT_US);
 		if (ret) {
 			pr_err("\nHPRE:CLUSTER %d INI ST STATUS timeout!", i);
 			return -ETIMEDOUT;
@@ -387,18 +419,18 @@ static u32 cluster_inqry_read(struct hpre_debugfs_file *file)
 {
 	struct hisi_qm *qm = file_to_qm(file);
 	int cluster_index = file->index - HPRE_CLUSTER_CTRL;
-	unsigned long offset = HPRE_CLUSTER_BASE +
-		cluster_index * HPRE_CLUSTER_ADDR_INTRVL;
+	unsigned long offset = HPRE_CLSTR_BASE +
+			       cluster_index * HPRE_CLSTR_ADDR_INTRVL;
 
-	return readl(qm->io_base + offset + HPRE_CLUSTER_INQURY_RSLT);
+	return readl(qm->io_base + offset + HPRE_CLSTR_ADDR_INQRY_RSLT);
 }
 
 static int cluster_inqry_write(struct hpre_debugfs_file *file, u32 val)
 {
 	struct hisi_qm *qm = file_to_qm(file);
 	int cluster_index = file->index - HPRE_CLUSTER_CTRL;
-	unsigned long offset = HPRE_CLUSTER_BASE +
-		cluster_index * HPRE_CLUSTER_ADDR_INTRVL;
+	unsigned long offset = HPRE_CLSTR_BASE + cluster_index *
+			       HPRE_CLSTR_ADDR_INTRVL;
 
 	writel(val, qm->io_base + offset + HPRE_CLUSTER_INQURY);
 
@@ -406,10 +438,10 @@ static int cluster_inqry_write(struct hpre_debugfs_file *file, u32 val)
 }
 
 static ssize_t ctrl_debug_read(struct file *filp, char __user *buf,
-			     size_t count, loff_t *pos)
+			       size_t count, loff_t *pos)
 {
 	struct hpre_debugfs_file *file = filp->private_data;
-	char tbuf[20];
+	char tbuf[HPRE_DBGFS_VAL_MAX_LEN];
 	u32 val;
 	int ret;
 
@@ -434,20 +466,21 @@ static ssize_t ctrl_debug_read(struct file *filp, char __user *buf,
 }
 
 static ssize_t ctrl_debug_write(struct file *filp, const char __user *buf,
-			      size_t count, loff_t *pos)
+				size_t count, loff_t *pos)
 {
 	struct hpre_debugfs_file *file = filp->private_data;
-	char tbuf[20];
+	char tbuf[HPRE_DBGFS_VAL_MAX_LEN];
 	unsigned long val;
 	int len, ret;
 
 	if (*pos != 0)
 		return 0;
 
-	if (count >= 20)
+	if (count >= HPRE_DBGFS_VAL_MAX_LEN)
 		return -ENOSPC;
 
-	len = simple_write_to_buffer(tbuf, 20 - 1, pos, buf, count);
+	len = simple_write_to_buffer(tbuf, HPRE_DBGFS_VAL_MAX_LEN - 1,
+				     pos, buf, count);
 	if (len < 0)
 		return len;
 
@@ -493,7 +526,7 @@ static const struct file_operations ctrl_debug_fops = {
 };
 
 static int hpre_create_debugfs_file(struct hpre_ctrl *ctrl, struct dentry *dir,
-				enum ctrl_dbgfs_file type, int indx)
+				    enum ctrl_dbgfs_file type, int indx)
 {
 	struct dentry *tmp, *file_dir;
 
@@ -506,9 +539,8 @@ static int hpre_create_debugfs_file(struct hpre_ctrl *ctrl, struct dentry *dir,
 	ctrl->files[indx].ctrl = ctrl;
 	ctrl->files[indx].type = type;
 	ctrl->files[indx].index = indx;
-	tmp = debugfs_create_file(ctrl_debug_file_name[type], 0600,
-			file_dir, ctrl->files + indx,
-			&ctrl_debug_fops);
+	tmp = debugfs_create_file(ctrl_debug_file_name[type], 0600, file_dir,
+				  ctrl->files + indx, &ctrl_debug_fops);
 	if (!tmp)
 		return -ENOENT;
 
@@ -529,7 +561,7 @@ static int hpre_pf_comm_regs_debugfs_init(struct hpre_ctrl *ctrl)
 
 	regset->regs = hpre_com_dfx_regs;
 	regset->nregs = ARRAY_SIZE(hpre_com_dfx_regs);
-	regset->base = qm->io_base + HPRE_CTRL_CNT_CLR_CE;
+	regset->base = qm->io_base;
 
 	tmp = debugfs_create_regset32("regs", 0444,  ctrl->debug_root, regset);
 	if (!tmp)
@@ -545,7 +577,7 @@ static int hpre_cluster_debugfs_init(struct hpre_ctrl *ctrl)
 	struct device *dev = &qm->pdev->dev;
 	struct debugfs_regset32 *regset;
 	struct dentry *tmp_d, *tmp;
-	char buf[20];
+	char buf[HPRE_DBGFS_VAL_MAX_LEN];
 	int i, ret;
 
 	for (i = 0; i < HPRE_CLUSTERS_NUM; i++) {
@@ -567,7 +599,7 @@ static int hpre_cluster_debugfs_init(struct hpre_ctrl *ctrl)
 		if (!tmp)
 			return -ENOENT;
 		ret = hpre_create_debugfs_file(ctrl, tmp_d, HPRE_CLUSTER_CTRL,
-					i + HPRE_CLUSTER_CTRL);
+					       i + HPRE_CLUSTER_CTRL);
 		if (ret)
 			return ret;
 	}
@@ -581,11 +613,11 @@ static int hpre_ctrl_debug_init(struct hpre_ctrl *ctrl)
 
 
 	ret = hpre_create_debugfs_file(ctrl, NULL, HPRE_CURRENT_QM,
-				HPRE_CURRENT_QM);
+				       HPRE_CURRENT_QM);
 	if (ret)
 		return ret;
 	ret = hpre_create_debugfs_file(ctrl, NULL, HPRE_CLEAR_ENABLE,
-				HPRE_CLEAR_ENABLE);
+				       HPRE_CLEAR_ENABLE);
 	if (ret)
 		return ret;
 
@@ -611,7 +643,7 @@ static int hpre_debugfs_init(struct hpre *hpre)
 	if (ret)
 		goto failed_to_create;
 
-	if (qm->pdev->device == 0xa258) {
+	if (qm->pdev->device == HPRE_PCI_DEVICE_ID) {
 		hpre->ctrl->debug_root = dir;
 		ret = hpre_ctrl_debug_init(hpre->ctrl);
 		if (ret)
@@ -631,67 +663,19 @@ static void hpre_debugfs_exit(struct hpre *hpre)
 	debugfs_remove_recursive(qm->debug.debug_root);
 }
 
-static int hpre_pf_probe_init(struct hpre *hpre)
+static int hpre_qm_pre_init(struct hisi_qm *qm, struct pci_dev *pdev)
 {
-	struct hpre_ctrl *ctrl;
-	struct hisi_qm *qm = &hpre->qm;
-	u32 nfe_flag;
-
-	ctrl = devm_kzalloc(&qm->pdev->dev, sizeof(*ctrl), GFP_KERNEL);
-	if (!ctrl)
-		return -ENOMEM;
-
-	hpre->ctrl = ctrl;
-	ctrl->hpre = hpre;
-
-	switch (qm->ver) {
-	case QM_HW_V1:
-		ctrl->ctrl_q_num = HPRE_QUEUE_NUM_V1;
-		break;
-
-	case QM_HW_V2:
-		ctrl->ctrl_q_num = HPRE_QUEUE_NUM_V2;
-		break;
-
-	default:
-		return -EINVAL;
-	}
-
-	hpre_set_user_domain_and_cache(hpre);
-
-	nfe_flag = QM_BASE_NFE;
-	hisi_qm_hw_error_init(qm, QM_BASE_CE, nfe_flag, 0,
-			      QM_DB_RANDOM_INVALID);
-	hpre_hw_error_set_state(hpre, true);
-
-	return 0;
-}
-
-static int hpre_probe(struct pci_dev *pdev, const struct pci_device_id *id)
-{
-	struct hpre_ctrl *ctrl;
-	struct hpre *hpre;
-	struct hisi_qm *qm;
 	enum qm_hw_ver rev_id;
-	int ret;
 
 	rev_id = hisi_qm_get_hw_version(pdev);
 	if (rev_id < 0)
 		return -ENODEV;
-	hpre = devm_kzalloc(&pdev->dev, sizeof(*hpre), GFP_KERNEL);
-	if (!hpre)
-		return -ENOMEM;
-	pci_set_drvdata(pdev, hpre);
-	qm = &hpre->qm;
 	qm->pdev = pdev;
 	qm->ver = rev_id;
-	ctrl = devm_kzalloc(&pdev->dev, sizeof(*ctrl), GFP_KERNEL);
-	if (!ctrl)
-		return -ENOMEM;
-	hpre->ctrl = ctrl;
 	qm->sqe_size = HPRE_SQE_SIZE;
 	qm->dev_name = hpre_name;
-	qm->fun_type = (pdev->device == 0xa258) ? QM_HW_PF : QM_HW_VF;
+	qm->fun_type = (pdev->device == HPRE_PCI_DEVICE_ID) ?
+		       QM_HW_PF : QM_HW_VF;
 	qm->algs = "rsa\ndh\n";
 	switch (uacce_mode) {
 	case UACCE_MODE_NOUACCE:
@@ -714,6 +698,67 @@ static int hpre_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 	default:
 		return -EINVAL;
 	}
+	if (pdev->is_physfn) {
+		qm->qp_base = HPRE_PF_DEF_Q_BASE;
+		qm->qp_num = pf_q_num;
+	} else if (qm->fun_type == QM_HW_VF && qm->ver == QM_HW_V1) {
+		qm->qp_base = HPRE_PF_DEF_Q_NUM;
+		qm->qp_num = HPRE_QUEUE_NUM_V1 - HPRE_PF_DEF_Q_NUM;
+	}
+	return 0;
+}
+
+static void hpre_hw_err_init(struct hpre *hpre)
+{
+	hisi_qm_hw_error_init(&hpre->qm, QM_BASE_CE, QM_BASE_NFE,
+			      0, QM_DB_RANDOM_INVALID);
+	hpre_hw_error_set_state(hpre, true);
+}
+
+static int hpre_pf_probe_init(struct hpre *hpre)
+{
+	struct hpre_ctrl *ctrl;
+	struct hisi_qm *qm = &hpre->qm;
+	int ret;
+
+	ctrl = devm_kzalloc(&qm->pdev->dev, sizeof(*ctrl), GFP_KERNEL);
+	if (!ctrl)
+		return -ENOMEM;
+	hpre->ctrl = ctrl;
+	ctrl->hpre = hpre;
+	switch (qm->ver) {
+	case QM_HW_V1:
+		ctrl->ctrl_q_num = HPRE_QUEUE_NUM_V1;
+		break;
+
+	case QM_HW_V2:
+		ctrl->ctrl_q_num = HPRE_QUEUE_NUM_V2;
+		break;
+
+	default:
+		return -EINVAL;
+	}
+	ret = hpre_set_user_domain_and_cache(hpre);
+	if (ret)
+		return ret;
+	hpre_hw_err_init(hpre);
+	return 0;
+}
+
+static int hpre_probe(struct pci_dev *pdev, const struct pci_device_id *id)
+{
+	struct hpre *hpre;
+	struct hisi_qm *qm;
+	int ret;
+
+	hpre = devm_kzalloc(&pdev->dev, sizeof(*hpre), GFP_KERNEL);
+	if (!hpre)
+		return -ENOMEM;
+	pci_set_drvdata(pdev, hpre);
+	qm = &hpre->qm;
+	ret = hpre_qm_pre_init(qm, pdev);
+	if (ret)
+		return ret;
 	ret = hisi_qm_init(qm);
 	if (ret)
 		return ret;
@@ -722,17 +767,11 @@ static int hpre_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 		ret = hpre_pf_probe_init(hpre);
 		if (ret)
 			goto err_with_qm_init;
-
-		qm->qp_base = HPRE_PF_DEF_Q_BASE;
-		qm->qp_num = HPRE_PF_DEF_Q_NUM;
-		/* qm->free_qp = qm->qp_num; */
-	} else if (qm->fun_type == QM_HW_VF) {
-		if (qm->ver == QM_HW_V1) {
-			qm->qp_base = HPRE_PF_DEF_Q_NUM;
-			qm->qp_num = HPRE_QUEUE_NUM_V1 - HPRE_PF_DEF_Q_NUM;
-		} else if (qm->ver == QM_HW_V2)
-			/* v2 starts to support get vft by mailbox */
-			hisi_qm_get_vft(qm, &qm->qp_base, &qm->qp_num);
+	} else if (qm->fun_type == QM_HW_VF && qm->ver == QM_HW_V2) {
+		/* v2 starts to support get vft by mailbox */
+		ret = hisi_qm_get_vft(qm, &qm->qp_base, &qm->qp_num);
+		if (ret)
+			goto err_with_qm_init;
 	}
 	ret = hisi_qm_start(qm);
 	if (ret)
@@ -776,7 +815,8 @@ static int hpre_clear_vft_config(struct hpre *hpre)
 {
 	struct hpre_ctrl *ctrl = hpre->ctrl;
 	struct hisi_qm *qm = &hpre->qm;
-	u32 i, num_vfs = ctrl->num_vfs;
+	u32 i;
+	u32 num_vfs = ctrl->num_vfs;
 	int ret;
 
 	for (i = 1; i <= num_vfs; i++) {
@@ -861,7 +901,7 @@ static void hpre_log_hw_error(struct hpre *hpre, u32 err_sts)
 			}
 			if (HPRE_HAC_INT_ECC2 & err_sts) {
 				err_val = readl(hpre->qm.io_base +
-				HPRE_HAC_ECC2_CNT);
+						HPRE_HAC_ECC2_CNT);
 				dev_warn(dev, "hpre ecc 2bit sram num=0x%x\n",
 					 err_val);
 			}
@@ -980,8 +1020,9 @@ static int hpre_soft_reset(struct hpre *hpre)
 	/* If bus lock, reset chip */
 	ret = readl_relaxed_poll_timeout(hpre->qm.io_base +
 					 HPRE_MASTER_TRANS_RETURN, val,
-					 (val == MASTER_TRANS_RETURN_RW), 10,
-					 1000);
+					 (val == MASTER_TRANS_RETURN_RW),
+					 _REG_RD_INTVRL_US,
+					 _REG_RD_TMOUT_US);
 	if (ret) {
 		dev_emerg(dev, "Bus lock! Please reset system.\n");
 		return ret;
@@ -991,7 +1032,7 @@ static int hpre_soft_reset(struct hpre *hpre)
 	if (ACPI_HANDLE(dev)) {
 		acpi_status s;
 
-		s = acpi_evaluate_object(ACPI_HANDLE(dev), "_RST", NULL, NULL);
+		s = acpi_evaluate_object(ACPI_HANDLE(dev), "ZRST", NULL, NULL);
 		if (ACPI_FAILURE(s)) {
 			dev_err(dev, "Controller reset fails\n");
 			return -EIO;
@@ -1012,7 +1053,10 @@ static int hpre_controller_reset_done(struct hpre *hpre)
 	int i, ret;
 
 	hisi_qm_clear_queues(qm);
-	hpre_set_user_domain_and_cache(hpre);
+	ret = hpre_set_user_domain_and_cache(hpre);
+	if (ret)
+		return ret;
+	hpre_hw_err_init(hpre);
 	ret = hisi_qm_start(qm);
 	if (ret) {
 		dev_err(&pdev->dev, "Failed to start QM!\n");
@@ -1121,7 +1165,9 @@ static void hpre_reset_done(struct pci_dev *pdev)
 
 	if (pdev->is_physfn) {
 		hisi_qm_clear_queues(qm);
-		hpre_set_user_domain_and_cache(hpre);
+		ret = hpre_set_user_domain_and_cache(hpre);
+		if (ret)
+			return;
 		ret = hisi_qm_start(qm);
 		if (ret) {
 			dev_err(dev, "Failed to start QM!\n");
@@ -1150,10 +1196,16 @@ static void hpre_remove(struct pci_dev *pdev)
 {
 	struct hpre *hpre = pci_get_drvdata(pdev);
 	struct hisi_qm *qm = &hpre->qm;
+	int ret;
 
 	hpre_remove_from_list(hpre);
-	if (qm->fun_type == QM_HW_PF && hpre->ctrl->num_vfs != 0)
-		hpre_sriov_disable(pdev);
+	if (qm->fun_type == QM_HW_PF && hpre->ctrl->num_vfs != 0) {
+		ret = hpre_sriov_disable(pdev);
+		if (ret) {
+			dev_err(&pdev->dev, "Disable SRIOV fail!\n");
+			return;
+		}
+	}
 	hpre_debugfs_exit(hpre);
 	hisi_qm_stop(qm);
 	if (qm->fun_type == QM_HW_PF)

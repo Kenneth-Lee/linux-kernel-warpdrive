@@ -52,7 +52,8 @@ struct hpre_sqe {
 	__u32 hi_out;
 	__u32 tag	:16;
 	__u32 resv2	:16;
-	__u32 rsvd1[7];
+#define _HPRE_SQE_ALIGN_EXT	7
+	__u32 rsvd1[_HPRE_SQE_ALIGN_EXT];
 };
 
 extern struct hpre *find_hpre_device(int node);
