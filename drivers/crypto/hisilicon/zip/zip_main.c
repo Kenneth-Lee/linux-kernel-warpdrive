@@ -214,10 +214,10 @@ static int pf_q_num_set(const char *val, const struct kernel_param *kp)
 	} else {
 		rev_id = pdev->revision;
 		switch (rev_id) {
-		case 0x20:
+		case QM_HW_VER1_ID:
 			q_num = HZIP_QUEUE_NUM_V1;
 			break;
-		case 0x21:
+		case QM_HW_VER2_ID:
 			q_num = HZIP_QUEUE_NUM_V2;
 			break;
 		default:
