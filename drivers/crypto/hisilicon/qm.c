@@ -2086,9 +2086,9 @@ EXPORT_SYMBOL_GPL(hisi_qm_clear_queues);
 enum qm_hw_ver hisi_qm_get_hw_version(struct pci_dev *pdev)
 {
 	switch (pdev->revision) {
-	case 0x20:
+	case QM_HW_VER1_ID:
 		return QM_HW_V1;
-	case 0x21:
+	case QM_HW_VER2_ID:
 		return QM_HW_V2;
 	default:
 		return QM_HW_UNKNOWN;

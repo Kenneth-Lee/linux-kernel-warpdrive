@@ -50,6 +50,8 @@
 			 QM_ACC_GET_TASK_TIMEOUT | QM_ACC_DO_TASK_TIMEOUT | \
 			 QM_DB_TIMEOUT | QM_OF_FIFO_OF)
 #define QM_BASE_CE			QM_ECC_1BIT
+#define QM_HW_VER1_ID			0x20
+#define QM_HW_VER2_ID			0x21
 
 enum qm_state {
 	QM_RESET,
