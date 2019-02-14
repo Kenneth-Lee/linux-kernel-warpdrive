@@ -1091,64 +1091,16 @@ void hisi_qm_release_qp(struct hisi_qp *qp)
 }
 EXPORT_SYMBOL_GPL(hisi_qm_release_qp);
 
-/**
- * hisi_qm_start_qp() - Start a qp into running.
- * @qp: The qp we want to start to run.
- * @arg: Accelerator specific argument.
- *
- * After this function, qp can receive request from user. Return qp_id if
- * successful, Return -EBUSY if failed.
- */
-int hisi_qm_start_qp(struct hisi_qp *qp, unsigned long arg)
+static int qm_qp_ctx_cfg(struct hisi_qp *qp, int qp_id, int pasid)
 {
 	struct hisi_qm *qm = qp->qm;
-	int qp_id = qp->qp_id;
-	struct device *dev = &qm->pdev->dev;
 	enum qm_hw_ver ver = qm->ver;
 	struct qm_sqc *sqc;
 	struct qm_cqc *cqc;
-	int pasid = arg;
 	int ret;
-	size_t off = 0;
 
-#define QP_INIT_BUF(qp, type, size) do { \
-	(qp)->type = ((qp)->qdma.va + (off)); \
-	(qp)->type##_dma = (qp)->qdma.dma + (off); \
-	off += (size); \
-} while (0)
-
-	if (!qp->qdma.dma) {
-		dev_err(dev, "cannot get qm dma buffer\n");
-		return -EINVAL;
-	}
-
-	/* sq need 128 bytes alignment */
-	if (qp->qdma.dma & 0x7F) {
-		dev_err(dev, "qm sq is not aligned to 128 byte\n");
-		return -EINVAL;
-	}
-
-	WARN_ON(!qm->sqc);
-	WARN_ON(!qm->cqc);
-
-	sqc = qp->sqc = qm->sqc + qp_id;
-	cqc = qp->cqc = qm->cqc + qp_id;
-	qp->sqc_dma = qm->sqc_dma + qp_id * sizeof(struct qm_sqc);
-	qp->cqc_dma = qm->cqc_dma + qp_id * sizeof(struct qm_cqc);
-
-	QP_INIT_BUF(qp, sqe, qm->sqe_size * QM_Q_DEPTH);
-	QP_INIT_BUF(qp, cqe, sizeof(struct cqe) * QM_Q_DEPTH);
-
-	dev_dbg(dev, "init qp buffer(v%d):\n"
-		     " sqc	(%lx, %lx)\n"
-		     " cqc	(%lx, %lx)\n"
-		     " sqe	(%lx, %lx)\n"
-		     " cqe	(%lx, %lx)\n",
-		     ver,
-		     (unsigned long)qp->sqc, (unsigned long)qp->sqc_dma,
-		     (unsigned long)qp->cqc, (unsigned long)qp->cqc_dma,
-		     (unsigned long)qp->sqe, (unsigned long)qp->sqe_dma,
-		     (unsigned long)qp->cqe, (unsigned long)qp->cqe_dma);
+	sqc = qm->sqc + qp_id;
+	cqc = qm->cqc + qp_id;
 
 	INIT_QC_COMMON(sqc, qp->sqe_dma, pasid);
 	if (ver == QM_HW_V1) {
@@ -1176,9 +1128,70 @@ int hisi_qm_start_qp(struct hisi_qp *qp, unsigned long arg)
 	cqc->dw6 = 1 << QM_CQ_PHASE_SHIFT | 1 << QM_CQ_FLAG_SHIFT;
 
 	ret = qm_mb(qm, QM_MB_CMD_CQC, qp->cqc_dma, qp_id, 0, 0);
+
+	return ret;
+}
+
+/**
+ * hisi_qm_start_qp() - Start a qp into running.
+ * @qp: The qp we want to start to run.
+ * @arg: Accelerator specific argument.
+ *
+ * After this function, qp can receive request from user. Return qp_id if
+ * successful, Return -EBUSY if failed.
+ */
+int hisi_qm_start_qp(struct hisi_qp *qp, unsigned long arg)
+{
+	struct hisi_qm *qm = qp->qm;
+	struct device *dev = &qm->pdev->dev;
+	enum qm_hw_ver ver = qm->ver;
+	int qp_id = qp->qp_id;
+	int pasid = arg;
+	size_t off = 0;
+	int ret;
+
+#define QP_INIT_BUF(qp, type, size) do { \
+	(qp)->type = ((qp)->qdma.va + (off)); \
+	(qp)->type##_dma = (qp)->qdma.dma + (off); \
+	off += (size); \
+} while (0)
+
+	if (!qp->qdma.dma) {
+		dev_err(dev, "cannot get qm dma buffer\n");
+		return -EINVAL;
+	}
+
+	/* sq need 128 bytes alignment */
+	if (qp->qdma.dma & 0x7F) {
+		dev_err(dev, "qm sq is not aligned to 128 byte\n");
+		return -EINVAL;
+	}
+
+	WARN_ON(!qm->sqc);
+	WARN_ON(!qm->cqc);
+
+	qp->sqc = qm->sqc + qp_id;
+	qp->cqc = qm->cqc + qp_id;
+	qp->sqc_dma = qm->sqc_dma + qp_id * sizeof(struct qm_sqc);
+	qp->cqc_dma = qm->cqc_dma + qp_id * sizeof(struct qm_cqc);
+
+	QP_INIT_BUF(qp, sqe, qm->sqe_size * QM_Q_DEPTH);
+	QP_INIT_BUF(qp, cqe, sizeof(struct cqe) * QM_Q_DEPTH);
+
+	dev_dbg(dev, "init qp buffer(v%d):\n"
+		     " sqc	(%lx, %lx)\n"
+		     " cqc	(%lx, %lx)\n"
+		     " sqe	(%lx, %lx)\n"
+		     " cqe	(%lx, %lx)\n",
+		     ver,
+		     (unsigned long)qp->sqc, (unsigned long)qp->sqc_dma,
+		     (unsigned long)qp->cqc, (unsigned long)qp->cqc_dma,
+		     (unsigned long)qp->sqe, (unsigned long)qp->sqe_dma,
+		     (unsigned long)qp->cqe, (unsigned long)qp->cqe_dma);
+
+	ret = qm_qp_ctx_cfg(qp, qp_id, pasid);
 	if (ret)
 		return ret;
-
 	dev_dbg(dev, "queue %d started\n", qp_id);
 
 	return qp_id;
@@ -1737,14 +1750,37 @@ int hisi_qm_set_vft(struct hisi_qm *qm, u32 fun_num, u32 base,
 }
 EXPORT_SYMBOL_GPL(hisi_qm_set_vft);
 
+static int qm_eq_ctx_cfg(struct hisi_qm *qm)
+{
+	struct qm_eqc *eqc;
+	struct qm_aeqc *aeqc;
+	int ret;
+
+	eqc = qm->eqc;
+	eqc->base_l = lower_32_bits(qm->eqe_dma);
+	eqc->base_h = upper_32_bits(qm->eqe_dma);
+	eqc->dw3 = 2 << QM_EQC_EQE_SHIFT;
+	eqc->dw6 = (QM_Q_DEPTH - 1) | (1 << QM_EQC_PHASE_SHIFT);
+	ret = qm_mb(qm, QM_MB_CMD_EQC, qm->eqc_dma, 0, 0, 0);
+	if (ret)
+		return ret;
+
+	aeqc = qm->aeqc;
+	aeqc->base_l = lower_32_bits(qm->aeqe_dma);
+	aeqc->base_h = upper_32_bits(qm->aeqe_dma);
+	aeqc->dw3 = 2 << QM_EQC_EQE_SHIFT;
+	aeqc->dw6 = (QM_Q_DEPTH - 1) | (1 << QM_EQC_PHASE_SHIFT);
+	ret = qm_mb(qm, QM_MB_CMD_AEQC, qm->aeqc_dma, 0, 0, 0);
+
+	return ret;
+}
+
 static int __hisi_qm_start(struct hisi_qm *qm)
 {
 	struct pci_dev *pdev = qm->pdev;
 	struct device *dev = &pdev->dev;
-	struct qm_eqc *eqc;
-	struct qm_aeqc *aeqc;
-	int ret;
 	size_t off = 0;
+	int ret;
 #ifdef CONFIG_CRYPTO_QM_UACCE
 	size_t dko_size;
 #endif
@@ -1807,22 +1843,7 @@ static int __hisi_qm_start(struct hisi_qm *qm)
 			return -EINVAL;
 	}
 #endif
-
-	eqc = qm->eqc;
-	eqc->base_l = lower_32_bits(qm->eqe_dma);
-	eqc->base_h = upper_32_bits(qm->eqe_dma);
-	eqc->dw3 = 2 << QM_EQC_EQE_SHIFT;
-	eqc->dw6 = (QM_Q_DEPTH - 1) | (1 << QM_EQC_PHASE_SHIFT);
-	ret = qm_mb(qm, QM_MB_CMD_EQC, qm->eqc_dma, 0, 0, 0);
-	if (ret)
-		return ret;
-
-	aeqc = qm->aeqc;
-	aeqc->base_l = lower_32_bits(qm->aeqe_dma);
-	aeqc->base_h = upper_32_bits(qm->aeqe_dma);
-	aeqc->dw3 = 2 << QM_EQC_EQE_SHIFT;
-	aeqc->dw6 = (QM_Q_DEPTH - 1) | (1 << QM_EQC_PHASE_SHIFT);
-	ret = qm_mb(qm, QM_MB_CMD_AEQC, qm->aeqc_dma, 0, 0, 0);
+	ret = qm_eq_ctx_cfg(qm);
 	if (ret)
 		return ret;
 
