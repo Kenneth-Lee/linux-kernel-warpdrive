@@ -69,6 +69,7 @@
 #define QM_AEQC_PHASE(aeqc)		((((aeqc)->dw6) >> 16) & 0x1)
 #define QM_AEQC_PHASE_BIT		0x00010000
 #define QM_AEQE_PHASE(aeqe)		(((aeqe)->dw0 >> 16) & 0x1)
+#define QM_AEQE_TYPE_SHIFT		17
 
 #define QM_DOORBELL_CMD_SQ		0
 #define QM_DOORBELL_CMD_CQ		1
@@ -129,6 +130,15 @@
 #define QM_CACHE_WB_START		0x204
 #define QM_CACHE_WB_DONE		0x208
 #define QM_V2_BASE_OFFSET		0x1000
+
+#define POLL_PERIOD			10
+#define POLL_TIMEOUT			1000
+#define TEMPBUFFER_LEN			20
+
+#define QM_DB_TIMEOUT_TYPE_SHIFT	6
+#define QM_FIFO_OVERFLOW_TYPE_SHIFT	6
+
+#define TASK_TIMEOUT			10
 
 #define QM_MK_CQC_DW3_V1(hop_num, pg_sz, buf_sz, sqe_sz) \
 	(((hop_num) << QM_CQ_HOP_NUM_SHIFT)	| \
@@ -224,7 +234,7 @@ static int qm_wait_mb_ready(struct hisi_qm *qm)
 
 	return readl_relaxed_poll_timeout(qm->io_base + QM_MB_CMD_SEND_BASE,
 					  val, !((val >> QM_MB_BUSY_SHIFT) &
-					  0x1), 10, 1000);
+					  0x1), POLL_PERIOD, POLL_TIMEOUT);
 }
 
 /* 128 bit should be wrote to hardware at one time to trigger a mailbox */
@@ -325,7 +335,8 @@ static int qm_dev_mem_reset(struct hisi_qm *qm)
 
 	writel(0x1, qm->io_base + QM_MEM_START_INIT);
 	return readl_relaxed_poll_timeout(qm->io_base + QM_MEM_INIT_DONE, val,
-					  val & BIT(0), 10, 1000);
+					  val & BIT(0), POLL_PERIOD,
+					  POLL_TIMEOUT);
 }
 
 
@@ -446,7 +457,7 @@ static irqreturn_t qm_aeq_irq(int irq, void *data)
 	u32 type;
 
 	while (QM_AEQE_PHASE(aeqe) == QM_AEQC_PHASE(aeqc)) {
-		type = aeqe->dw0 >> 17;
+		type = aeqe->dw0 >> QM_AEQE_TYPE_SHIFT;
 		if (type < ARRAY_SIZE(qm_fifo_overflow))
 			dev_err(&qm->pdev->dev, "%s overflow\n",
 				qm_fifo_overflow[type]);
@@ -605,7 +616,8 @@ static int qm_set_vft_common(struct hisi_qm *qm, enum vft_type type,
 	int val, ret;
 
 	ret = readl_relaxed_poll_timeout(qm->io_base + QM_VFT_CFG_RDY, val,
-					 val & BIT(0), 10, 1000);
+					 val & BIT(0), POLL_PERIOD,
+					 POLL_TIMEOUT);
 	if (ret)
 		return ret;
 
@@ -619,7 +631,8 @@ static int qm_set_vft_common(struct hisi_qm *qm, enum vft_type type,
 	writel(0x1, qm->io_base + QM_VFT_CFG_OP_ENABLE);
 
 	return readl_relaxed_poll_timeout(qm->io_base + QM_VFT_CFG_RDY, val,
-					  val & BIT(0), 10, 1000);
+					  val & BIT(0), POLL_PERIOD,
+					  POLL_TIMEOUT);
 }
 
 /* The config should be conducted after qm_dev_mem_reset() */
@@ -706,7 +719,7 @@ static ssize_t qm_debug_read(struct file *filp, char __user *buf,
 {
 	struct debugfs_file *file = filp->private_data;
 	enum qm_debug_file index = file->index;
-	char tbuf[20];
+	char tbuf[TEMPBUFFER_LEN];
 	u32 val;
 	int ret;
 
@@ -733,16 +746,16 @@ static ssize_t qm_debug_write(struct file *filp, const char __user *buf,
 	struct debugfs_file *file = filp->private_data;
 	enum qm_debug_file index = file->index;
 	unsigned long val;
-	char tbuf[20];
+	char tbuf[TEMPBUFFER_LEN];
 	int len, ret;
 
 	if (*pos != 0)
 		return 0;
 
-	if (count >= 20)
+	if (count >= TEMPBUFFER_LEN)
 		return -ENOSPC;
 
-	len = simple_write_to_buffer(tbuf, 20 - 1, pos, buf, count);
+	len = simple_write_to_buffer(tbuf, TEMPBUFFER_LEN - 1, pos, buf, count);
 	if (len < 0)
 		return len;
 
@@ -912,7 +925,8 @@ static void qm_log_hw_error(struct hisi_qm *qm, u32 error_status)
 
 		if (error_status & QM_DB_TIMEOUT) {
 			reg_val = readl(qm->io_base + QM_ABNORMAL_INF01);
-			type = (reg_val & QM_DB_TIMEOUT_TYPE) >> 6;
+			type = (reg_val & QM_DB_TIMEOUT_TYPE)
+				>> QM_DB_TIMEOUT_TYPE_SHIFT;
 			vf_num = reg_val & QM_DB_TIMEOUT_VF;
 			dev_warn(dev, "qm %s doorbell timeout in function %u\n",
 				 qm_db_timeout[type], vf_num);
@@ -920,7 +934,8 @@ static void qm_log_hw_error(struct hisi_qm *qm, u32 error_status)
 
 		if (error_status & QM_OF_FIFO_OF) {
 			reg_val = readl(qm->io_base + QM_ABNORMAL_INF00);
-			type = (reg_val & QM_FIFO_OVERFLOW_TYPE) >> 6;
+			type = (reg_val & QM_FIFO_OVERFLOW_TYPE)
+				>> QM_FIFO_OVERFLOW_TYPE_SHIFT;
 			vf_num = reg_val & QM_FIFO_OVERFLOW_VF;
 
 			if (type < ARRAY_SIZE(qm_fifo_overflow))
@@ -1249,7 +1264,7 @@ EXPORT_SYMBOL_GPL(hisi_qp_send);
 int hisi_qp_wait(struct hisi_qp *qp)
 {
 	if (wait_for_completion_timeout(&qp->completion,
-					msecs_to_jiffies(10)) == 0) {
+					msecs_to_jiffies(TASK_TIMEOUT)) == 0) {
 		atomic_dec(&qp->qp_status.used);
 		dev_err(&qp->qm->pdev->dev, "QM task timeout\n");
 		return -ETIME;
@@ -1266,7 +1281,8 @@ static void hisi_qm_cache_wb(struct hisi_qm *qm)
 	if (qm->ver == QM_HW_V2) {
 		writel(0x1, qm->io_base + QM_CACHE_WB_START);
 		if (readl_relaxed_poll_timeout(qm->io_base + QM_CACHE_WB_DONE,
-					       val, val & BIT(0), 10, 1000))
+					       val, val & BIT(0), POLL_PERIOD,
+					       POLL_TIMEOUT))
 			dev_err(&qm->pdev->dev,
 				"QM writeback sqc cache fail!\n");
 	}
