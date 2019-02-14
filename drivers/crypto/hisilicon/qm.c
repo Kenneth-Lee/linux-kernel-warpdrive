@@ -140,6 +140,9 @@
 
 #define TASK_TIMEOUT			10
 
+#define WAIT_PERIOD			20
+#define MAX_WAIT_COUNTS			3
+
 #define QM_MK_CQC_DW3_V1(hop_num, pg_sz, buf_sz, sqe_sz) \
 	(((hop_num) << QM_CQ_HOP_NUM_SHIFT)	| \
 	((pg_sz) << QM_CQ_PAGE_SIZE_SHIFT)	| \
@@ -1200,8 +1203,8 @@ int hisi_qm_stop_qp(struct hisi_qp *qp)
 
 	while (atomic_read(&qp->qp_status.used)) {
 		i++;
-		msleep(5);
-		if (i == 10) {
+		msleep(WAIT_PERIOD);
+		if (i == MAX_WAIT_COUNTS) {
 			dev_err(dev, "Cannot drain out data for stopping, force to stop!\n");
 			return -EBUSY;
 		}
