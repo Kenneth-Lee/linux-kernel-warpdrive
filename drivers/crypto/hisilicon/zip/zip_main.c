@@ -704,6 +704,9 @@ static int hisi_zip_vf_q_assign(struct hisi_zip *hisi_zip, int num_vfs)
 	u32 q_num, remain_q_num, i;
 	int ret;
 
+	if (!num_vfs)
+		return -EINVAL;
+
 	remain_q_num = ctrl->ctrl_q_num - qp_num;
 	q_num = remain_q_num / num_vfs;
 
@@ -885,6 +888,9 @@ static pci_ers_result_t hisi_zip_process_hw_error(struct pci_dev *pdev)
 static pci_ers_result_t hisi_zip_error_detected(struct pci_dev *pdev,
 						pci_channel_state_t state)
 {
+	if (pdev->is_virtfn)
+		return PCI_ERS_RESULT_NONE;
+
 	dev_info(&pdev->dev, "PCI error detected, state(=%d)!!\n", state);
 	if (state == pci_channel_io_perm_failure)
 		return PCI_ERS_RESULT_DISCONNECT;
@@ -907,15 +913,6 @@ static int hisi_zip_controller_reset_prepare(struct hisi_zip *hisi_zip)
 	if (test_and_set_bit(QM_RESET, &qm->flags)) {
 		dev_warn(&pdev->dev, "Failed to set reset flag!");
 		return -EPERM;
-	}
-
-	/* If having VFs enable, let's disable them firstly */
-	if (hisi_zip->ctrl->num_vfs) {
-		ret = hisi_zip_sriov_disable(pdev);
-		if (ret) {
-			dev_err(&pdev->dev, "Fails to disable VFs!\n");
-			return ret;
-		}
 	}
 
 	return 0;
@@ -944,7 +941,7 @@ static int hisi_zip_soft_reset(struct hisi_zip *hisi_zip)
 	u32 val;
 
 	/* Set VF MSE bit */
-	hisi_zip_set_mse(hisi_zip, 1);
+	hisi_zip_set_mse(hisi_zip, 0);
 
 	/* OOO register set and check */
 	writel(MASTER_GLOBAL_CTRL_SHUTDOWN,
@@ -1006,16 +1003,11 @@ static int hisi_zip_controller_reset_done(struct hisi_zip *hisi_zip)
 		}
 	}
 
-	if (hisi_zip->ctrl->num_vfs) {
-		ret = hisi_zip_sriov_enable(pdev, hisi_zip->ctrl->num_vfs);
-		if (ret) {
-			dev_err(&pdev->dev, "Can't enable VFs!\n");
-			return ret;
-		}
-	}
+	if (hisi_zip->ctrl->num_vfs)
+		hisi_zip_vf_q_assign(hisi_zip, hisi_zip->ctrl->num_vfs);
 
 	/* Clear VF MSE bit */
-	hisi_zip_set_mse(hisi_zip, 0);
+	hisi_zip_set_mse(hisi_zip, 1);
 
 	return 0;
 }
@@ -1052,6 +1044,9 @@ static pci_ers_result_t hisi_zip_slot_reset(struct pci_dev *pdev)
 	struct hisi_zip *hisi_zip = pci_get_drvdata(pdev);
 	int ret;
 
+	if (pdev->is_virtfn)
+		return PCI_ERS_RESULT_RECOVERED;
+
 	dev_info(&pdev->dev, "Requesting reset due to PCI error\n");
 
 	pci_cleanup_aer_uncorrect_error_status(pdev);
@@ -1085,15 +1080,6 @@ static void hisi_zip_reset_prepare(struct pci_dev *pdev)
 		return;
 	}
 
-	/* If having VFs in PF, disable VFs before PF FLR */
-	if (pdev->is_physfn && hisi_zip->ctrl->num_vfs) {
-		ret = hisi_zip_sriov_disable(pdev);
-		if (ret) {
-			dev_err(dev, "Fails to disable VFs\n");
-			return;
-		}
-	}
-
 	dev_info(dev, "FLR resetting...\n");
 }
 
@@ -1109,6 +1095,7 @@ static void hisi_zip_reset_done(struct pci_dev *pdev)
 		hisi_qm_clear_queues(qm);
 
 		hisi_zip_set_user_domain_and_cache(hisi_zip);
+		hisi_zip_hw_error_init(hisi_zip);
 
 		ret = hisi_qm_start(qm);
 		if (ret) {
@@ -1127,14 +1114,9 @@ static void hisi_zip_reset_done(struct pci_dev *pdev)
 			}
 		}
 
-		if (hisi_zip->ctrl->num_vfs) {
-			ret = hisi_zip_sriov_enable(pdev,
-						    hisi_zip->ctrl->num_vfs);
-			if (ret) {
-				dev_err(dev, "Can't enable VFs!\n");
-				return;
-			}
-		}
+		if (hisi_zip->ctrl->num_vfs)
+			hisi_zip_vf_q_assign(hisi_zip,
+					     hisi_zip->ctrl->num_vfs);
 
 		dev_info(dev, "FLR reset complete\n");
 	}
