@@ -1890,8 +1890,10 @@ int hisi_qm_start(struct hisi_qm *qm)
 
 	dev_dbg(dev, "qm start with %d queue pairs\n", qm->qp_num);
 
-	if (!qm->qp_num)
+	if (!qm->qp_num) {
+		dev_err(dev, "qp_num should not be 0");
 		return -EINVAL;
+	}
 
 	/* reset qfr definition */
 #ifdef CONFIG_CRYPTO_QM_UACCE
