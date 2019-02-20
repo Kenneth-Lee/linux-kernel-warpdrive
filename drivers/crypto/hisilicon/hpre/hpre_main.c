@@ -798,6 +798,8 @@ static int hpre_vf_q_assign(struct hpre *hpre, int num_vfs)
 	int q_num, remain_q_num, i;
 	int ret;
 
+	if (!num_vfs)
+		return -EINVAL;
 	remain_q_num = ctrl->ctrl_q_num - qp_num;
 	q_num = remain_q_num / num_vfs;
 	for (i = 1; i <= num_vfs; i++) {
@@ -953,6 +955,8 @@ static pci_ers_result_t hpre_process_hw_error(struct pci_dev *pdev)
 static pci_ers_result_t hpre_error_detected(struct pci_dev *pdev,
 					    pci_channel_state_t state)
 {
+	if (pdev->is_virtfn)
+		return PCI_ERS_RESULT_NONE;
 	dev_info(&pdev->dev, "PCI error detected, state(=%d)!!\n", state);
 	if (state == pci_channel_io_perm_failure)
 		return PCI_ERS_RESULT_DISCONNECT;
@@ -975,16 +979,6 @@ static int hpre_controller_reset_prepare(struct hpre *hpre)
 		dev_warn(&pdev->dev, "Failed to set reset flag!");
 		return -EPERM;
 	}
-
-	/* If having VFs enable, let's disable them firstly */
-	if (hpre->ctrl->num_vfs) {
-		ret = hpre_sriov_disable(pdev);
-		if (ret) {
-			dev_err(&pdev->dev, "Fails to disable VFs!\n");
-			return ret;
-		}
-	}
-
 	return 0;
 }
 
@@ -1011,7 +1005,7 @@ static int hpre_soft_reset(struct hpre *hpre)
 	u32 val;
 
 	/* Set VF MSE bit */
-	hpre_set_mse(hpre, 1);
+	hpre_set_mse(hpre, 0);
 
 	/* OOO register set and check */
 	writel(MASTER_GLOBAL_CTRL_SHUTDOWN,
@@ -1072,14 +1066,11 @@ static int hpre_controller_reset_done(struct hpre *hpre)
 			}
 		}
 	}
-	ret = hpre_sriov_enable(pdev, pci_num_vf(pdev));
-	if (ret) {
-		dev_err(&pdev->dev, "Can't enable VFs!\n");
-		return ret;
-	}
+	if (hpre->ctrl->num_vfs)
+		hpre_vf_q_assign(hpre, hpre->ctrl->num_vfs);
 
 	/* Clear VF MSE bit */
-	hpre_set_mse(hpre, 0);
+	hpre_set_mse(hpre, 1);
 
 	return 0;
 }
@@ -1113,6 +1104,9 @@ static pci_ers_result_t hpre_slot_reset(struct pci_dev *pdev)
 	struct hpre *hpre = pci_get_drvdata(pdev);
 	int ret;
 
+	if (pdev->is_virtfn)
+		return PCI_ERS_RESULT_RECOVERED;
+
 	dev_info(&pdev->dev, "Requesting reset due to PCI error\n");
 	pci_cleanup_aer_uncorrect_error_status(pdev);
 
@@ -1144,14 +1138,6 @@ static void hpre_reset_prepare(struct pci_dev *pdev)
 		return;
 	}
 
-	/* If having VFs in PF, disable VFs before PF FLR */
-	if (pdev->is_physfn && hpre->ctrl->num_vfs) {
-		ret = hpre_sriov_disable(pdev);
-		if (ret) {
-			dev_err(dev, "Fails to disable VFs\n");
-			return;
-		}
-	}
 	dev_info(dev, "FLR resetting...\n");
 }
 
@@ -1168,6 +1154,7 @@ static void hpre_reset_done(struct pci_dev *pdev)
 		ret = hpre_set_user_domain_and_cache(hpre);
 		if (ret)
 			return;
+		hpre_hw_err_init(hpre);
 		ret = hisi_qm_start(qm);
 		if (ret) {
 			dev_err(dev, "Failed to start QM!\n");
@@ -1183,11 +1170,9 @@ static void hpre_reset_done(struct pci_dev *pdev)
 				}
 			}
 		}
-		ret = hpre_sriov_enable(pdev, pci_num_vf(pdev));
-		if (ret) {
-			dev_err(dev, "Can't enable VFs!\n");
-			return;
-		}
+		if (hpre->ctrl->num_vfs)
+			hpre_vf_q_assign(hpre, hpre->ctrl->num_vfs);
+
 		dev_info(dev, "FLR reset complete\n");
 	}
 }
