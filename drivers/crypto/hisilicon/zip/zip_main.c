@@ -933,7 +933,7 @@ static int hisi_zip_controller_reset_prepare(struct hisi_zip *hisi_zip)
 		return ret;
 	}
 
-	if (test_and_set_bit(QM_RESET, &qm->flags)) {
+	if (test_and_set_bit(QM_RESET, &qm->status.flags)) {
 		dev_warn(&pdev->dev, "Failed to set reset flag!");
 		return -EPERM;
 	}
@@ -1057,7 +1057,7 @@ static int hisi_zip_controller_reset(struct hisi_zip *hisi_zip)
 		return ret;
 
 	dev_info(dev, "Controller reset complete\n");
-	clear_bit(QM_RESET, &hisi_zip->qm.flags);
+	clear_bit(QM_RESET, &hisi_zip->qm.status.flags);
 
 	return 0;
 }
@@ -1098,7 +1098,7 @@ static void hisi_zip_reset_prepare(struct pci_dev *pdev)
 		return;
 	}
 
-	if (test_and_set_bit(QM_RESET, &qm->flags)) {
+	if (test_and_set_bit(QM_RESET, &qm->status.flags)) {
 		dev_warn(dev, "Failed to set reset flag!");
 		return;
 	}
