@@ -50,7 +50,7 @@ struct uacce_ops {
 
 	int (*get_available_instances)(struct uacce *uacce);
 	int (*get_queue)(struct uacce *uacce, unsigned long arg,
-		struct uacce_queue **q);
+	     struct uacce_queue **q);
 	void (*put_queue)(struct uacce_queue *q);
 	int (*start_queue)(struct uacce_queue *q);
 	void (*stop_queue)(struct uacce_queue *q);

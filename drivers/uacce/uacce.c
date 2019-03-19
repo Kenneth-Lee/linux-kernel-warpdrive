@@ -98,7 +98,7 @@ static inline int uacce_iommu_map_qfr(struct uacce_queue *q,
 	return 0;
 
 err_with_map_pages:
-	for (j = i-1; j >= 0; j--) {
+	for (j = i - 1; j >= 0; j--) {
 		iommu_unmap(domain, qfr->iova + j * PAGE_SIZE, PAGE_SIZE);
 		put_page(qfr->pages[j]);
 	}
@@ -106,7 +106,7 @@ err_with_map_pages:
 }
 
 static inline void uacce_iommu_unmap_qfr(struct uacce_queue *q,
-					       struct uacce_qfile_region *qfr)
+					 struct uacce_qfile_region *qfr)
 {
 	struct device *dev = q->uacce->pdev;
 	struct iommu_domain *domain = iommu_get_domain_for_dev(dev);
@@ -200,7 +200,7 @@ static int uacce_qfr_alloc_pages(struct uacce_qfile_region *qfr)
 	return 0;
 
 err_with_pages:
-	for (j = i-1; j >= 0; j--)
+	for (j = i - 1; j >= 0; j--)
 		put_page(qfr->pages[j]);
 
 	kfree(qfr->pages);
@@ -218,20 +218,20 @@ static void uacce_qfr_free_pages(struct uacce_qfile_region *qfr)
 }
 
 static inline int uacce_queue_mmap_qfr(struct uacce_queue *q,
-				  struct uacce_qfile_region *qfr,
-				  struct vm_area_struct *vma)
+				       struct uacce_qfile_region *qfr,
+				       struct vm_area_struct *vma)
 {
 #ifdef CONFIG_UACCE_FIX_MMAP
 	int i, ret;
 
-	if(qfr->nr_pages)
+	if (qfr->nr_pages)
 		dev_dbg(q->uacce->pdev, "mmap qfr (page ref=%d)\n",
 			page_ref_count(qfr->pages[0]));
 	for (i = 0; i < qfr->nr_pages; i++) {
 		get_page(qfr->pages[i]);
 		ret = remap_pfn_range(vma, vma->vm_start + (i << PAGE_SHIFT),
-				page_to_pfn(qfr->pages[i]), PAGE_SIZE,
-				vma->vm_page_prot);
+				      page_to_pfn(qfr->pages[i]), PAGE_SIZE,
+				      vma->vm_page_prot);
 		if (ret)
 			return ret;
 	}
@@ -245,7 +245,8 @@ static inline int uacce_queue_mmap_qfr(struct uacce_queue *q,
 }
 
 static struct uacce_qfile_region *uacce_create_region(struct uacce_queue *q,
-	struct vm_area_struct *vma, enum uacce_qfrt type, int flags)
+						      struct vm_area_struct *vma,
+						      enum uacce_qfrt type, int flags)
 {
 	struct uacce_qfile_region *qfr;
 	struct uacce *uacce = q->uacce;
@@ -278,8 +279,9 @@ static struct uacce_qfile_region *uacce_create_region(struct uacce_queue *q,
 	/* allocate memory */
 	if (flags & UACCE_QFRF_DMA) {
 		dev_dbg(uacce->pdev, "allocate dma %d pages\n", qfr->nr_pages);
-		qfr->kaddr = dma_alloc_coherent(uacce->pdev,
-			qfr->nr_pages << PAGE_SHIFT, &qfr->dma, GFP_KERNEL);
+		qfr->kaddr = dma_alloc_coherent(uacce->pdev, qfr->nr_pages <<
+						PAGE_SHIFT, &qfr->dma,
+						GFP_KERNEL);
 		if (!qfr->kaddr) {
 			goto err_with_qfr;
 			ret = -ENOMEM;
@@ -299,6 +301,7 @@ static struct uacce_qfile_region *uacce_create_region(struct uacce_queue *q,
 	/* mmap to user space */
 	if (flags & UACCE_QFRF_MMAP) {
 		if (flags & UACCE_QFRF_DMA) {
+
 			/* dma_mmap_coherent() requires vm_pgoff as 0
 			 * restore vm_pfoff to initial value for mmap()
 			 */
@@ -309,8 +312,9 @@ static struct uacce_qfile_region *uacce_create_region(struct uacce_queue *q,
 						qfr->dma,
 						qfr->nr_pages << PAGE_SHIFT);
 			vma->vm_pgoff = vm_pgoff;
-		} else
+		} else {
 			ret = uacce_queue_mmap_qfr(q, qfr, vma);
+		}
 
 		if (ret)
 			goto err_with_mapped_qfr;
@@ -369,7 +373,7 @@ static long uacce_cmd_share_qfr(struct uacce_queue *tgt, int fd)
 	if (filep->f_op != &uacce_fops)
 		goto out_with_fd;
 
-	src = (struct uacce_queue *)filep->private_data;
+	src = filep->private_data;
 	if (!src)
 		goto out_with_fd;
 
@@ -436,7 +440,7 @@ static int uacce_start_queue(struct uacce_queue *q)
 	return 0;
 
 err_with_vmap:
-	for (j = i; j >=0; j--) {
+	for (j = i; j >= 0; j--) {
 		qfr = q->qfrs[i];
 		if (qfr && qfr->kaddr) {
 			vunmap(qfr->kaddr);
@@ -459,8 +463,9 @@ static long uacce_get_ss_dma(struct uacce_queue *q, void __user *arg)
 	if (q->qfrs[UACCE_QFRT_SS]) {
 		dma = (unsigned long)(q->qfrs[UACCE_QFRT_SS]->dma);
 		dev_dbg(&uacce->dev, "uacce_get_ss_dma(%lx)\n", dma);
-	} else
+	} else {
 		ret = -EINVAL;
+	}
 	uacce_qs_wunlock();
 
 	if (copy_to_user(arg, &dma, sizeof(dma)))
@@ -470,9 +475,9 @@ static long uacce_get_ss_dma(struct uacce_queue *q, void __user *arg)
 }
 
 static long uacce_fops_unl_ioctl(struct file *filep,
-				unsigned int cmd, unsigned long arg)
+				 unsigned int cmd, unsigned long arg)
 {
-	struct uacce_queue *q = (struct uacce_queue *)filep->private_data;
+	struct uacce_queue *q = filep->private_data;
 	struct uacce *uacce = q->uacce;
 
 	switch (cmd) {
@@ -516,8 +521,8 @@ static int uacce_dev_open_check(struct uacce *uacce)
 	if (uacce->ops->flags & (UACCE_DEV_PASID | UACCE_DEV_NOIOMMU))
 		return 0;
 
-	if (atomic_cmpxchg(&uacce->state, UACCE_ST_INIT, UACCE_ST_OPENNED) 
-	    != UACCE_ST_INIT) {
+	if (atomic_cmpxchg(&uacce->state, UACCE_ST_INIT, UACCE_ST_OPENNED) !=
+	    UACCE_ST_INIT) {
 		dev_info(&uacce->dev, "this device can be openned only once\n");
 		return -EBUSY;
 	}
@@ -542,16 +547,16 @@ static int uacce_fops_open(struct inode *inode, struct file *filep)
 		return -EINVAL;
 
 	ret = uacce_dev_open_check(uacce);
-
-#ifdef CONFIG_IOMMU_SVA
-	if (uacce->ops->flags & UACCE_DEV_PASID)
-		ret = iommu_sva_bind_device(uacce->pdev, current->mm, &pasid,
-					    IOMMU_SVA_FEAT_IOPF, NULL);
-#endif
-
 	if (ret)
 		return ret;
-
+#ifdef CONFIG_IOMMU_SVA
+	if (uacce->ops->flags & UACCE_DEV_PASID) {
+		ret = iommu_sva_bind_device(uacce->pdev, current->mm, &pasid,
+					    IOMMU_SVA_FEAT_IOPF, NULL);
+		if (ret)
+			return ret;
+	}
+#endif
 	ret = uacce->ops->get_queue(uacce, pasid, &q);
 	if (ret < 0)
 		return ret;
