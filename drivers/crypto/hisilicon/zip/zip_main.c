@@ -27,7 +27,7 @@
 #define DECOMP3_ENABLE			BIT(5)
 #define DECOMP4_ENABLE			BIT(6)
 #define DECOMP5_ENABLE			BIT(7)
-#define ALL_COMP_DECOMP_EN 		(COMP0_ENABLE | COMP1_ENABLE |	   \
+#define ALL_COMP_DECOMP_EN		(COMP0_ENABLE | COMP1_ENABLE |	   \
 					 DECOMP0_ENABLE | DECOMP1_ENABLE | \
 					 DECOMP2_ENABLE | DECOMP3_ENABLE | \
 					 DECOMP4_ENABLE | DECOMP5_ENABLE)
@@ -853,7 +853,7 @@ static void hisi_zip_log_hw_error(struct hisi_zip *hisi_zip, u32 err_sts)
 			dev_warn(dev, "%s [error status=0x%x] found\n",
 				 err->msg, err->int_msk);
 
-			if (HZIP_CORE_INT_STATUS_M_ECC & err_sts) {
+			if (err->int_msk & HZIP_CORE_INT_STATUS_M_ECC) {
 				err_val = readl(hisi_zip->qm.io_base +
 						HZIP_CORE_SRAM_ECC_ERR_INFO);
 				dev_warn(dev, "hisi-zip multi ecc sram num=0x%x\n",
