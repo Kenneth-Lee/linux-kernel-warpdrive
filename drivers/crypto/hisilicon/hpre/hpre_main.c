@@ -53,8 +53,6 @@
 #define HPRE_CORE_INI_STATUS (HPRE_CLSTR_BASE + HPRE_CORE_INI_STATUS_OFFSET)
 #define HPRE_HAC_ECC1_CNT		0x301a04
 #define HPRE_HAC_ECC2_CNT		0x301a08
-#define HPRE_HAC_INT_ECC1		BIT(0)
-#define HPRE_HAC_INT_ECC2		BIT(1)
 #define HPRE_HAC_INT_STATUS		0x301800
 #define HPRE_HAC_SOURCE_INT		0x301600
 #define MASTER_GLOBAL_CTRL_SHUTDOWN	1
@@ -928,25 +926,11 @@ static void hpre_log_hw_error(struct hpre *hpre, u32 err_sts)
 {
 	const struct hpre_hw_error *err = hpre_hw_errors;
 	struct device *dev = &hpre->qm.pdev->dev;
-	u32 err_val;
 
 	while (err->msg) {
-		if (err->int_msk & err_sts) {
+		if (err->int_msk & err_sts)
 			dev_warn(dev, "%s [error status=0x%x] found\n",
 				 err->msg, err->int_msk);
-			if (HPRE_HAC_INT_ECC1 & err_sts) {
-				err_val = readl(hpre->qm.io_base +
-						HPRE_HAC_ECC1_CNT);
-				dev_warn(dev, "hpre ecc 1bit sram num=0x%x\n",
-					 err_val);
-			}
-			if (HPRE_HAC_INT_ECC2 & err_sts) {
-				err_val = readl(hpre->qm.io_base +
-						HPRE_HAC_ECC2_CNT);
-				dev_warn(dev, "hpre ecc 2bit sram num=0x%x\n",
-					 err_val);
-			}
-		}
 		err++;
 	}
 }
@@ -971,7 +955,6 @@ static pci_ers_result_t hpre_hw_error_handle(struct hpre *hpre)
 static pci_ers_result_t hpre_process_hw_error(struct pci_dev *pdev)
 {
 	struct hpre *hpre = pci_get_drvdata(pdev);
-	struct device *dev = &pdev->dev;
 	pci_ers_result_t qm_ret, hpre_ret, ret;
 
 	/* log qm error */
