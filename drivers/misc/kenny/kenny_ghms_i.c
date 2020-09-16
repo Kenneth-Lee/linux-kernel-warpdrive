@@ -20,15 +20,17 @@
 #define KENNY_GHMS "kenny_ghms"
 
 struct hw_state {
-	void *io_pa;
+	void *io_va;
 	dma_addr_t dma;
 	int *sm_va;
+	int private;
 };
 
 static int kenny_ghms_probe(struct platform_device *pdev) {
 	struct device *dev = &pdev->dev;
 	struct hw_state *hw;
 	struct resource *res;
+	int pvt;
 
 	hw = devm_kzalloc(dev, sizeof(*hw), GFP_KERNEL);
 	if (!hw)
@@ -39,9 +41,15 @@ static int kenny_ghms_probe(struct platform_device *pdev) {
 		dev_err(dev, "cannot find io space!\n");
 		return -ENODEV;
 	}
-	hw->io_pa = devm_ioremap_resource(dev, res);
-	if (IS_ERR(hw->io_pa))
-		return PTR_ERR(hw->io_pa);
+	hw->io_va = devm_ioremap_resource(dev, res);
+	if (IS_ERR(hw->io_va))
+		return PTR_ERR(hw->io_va);
+
+	pvt = readq(hw->io_va);
+	writeq(pvt+10, hw->io_va);
+	hw->private = readq(hw->io_va);
+	dev_info(dev, "handshake %d to %d, expected increate 20\n",
+		 pvt, hw->private);
 
 	hw->sm_va = dmam_alloc_coherent(dev, PAGE_SIZE, &hw->dma, GFP_KERNEL);
 	if (!hw->sm_va)
@@ -50,9 +58,9 @@ static int kenny_ghms_probe(struct platform_device *pdev) {
 	platform_set_drvdata(pdev, hw);
 
 	dev_info(dev,
-		 "init success with iobase=0x%llx, dma=0x%llx, sm_va=0x%llx\n",
-		 (unsigned long long)hw->io_pa,
-		 hw->dma, (unsigned long long)hw->sm_va);
+		 "init success with iobase=0x%llx(%llx, %llx)",
+		 (unsigned long long)hw->io_va,
+		 res->start, res->end);
 
 	return 0;
 }
