@@ -1,0 +1,82 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
+/**
+ * This module is used to test the framework of WarpDrive.
+ *
+ * It support a simular device as dummy_wd_dev in qemu and do almost the same.
+ * But it is a "real" hardware to the OS, so we can test the iommu feature
+ */
+
+#include <asm/page.h>
+#include <linux/dma-mapping.h>
+#include <linux/kthread.h>
+#include <linux/module.h>
+#include <linux/mutex.h>
+#include <linux/platform_device.h>
+#include <linux/printk.h>
+#include <linux/sched/signal.h>
+#include <linux/slab.h>
+#include <linux/of_address.h>
+
+#define KENNY_GHMS "kenny_ghms"
+
+struct hw_state {
+	void *io_pa;
+	dma_addr_t dma;
+	int *sm_va;
+};
+
+static int kenny_ghms_probe(struct platform_device *pdev) {
+	struct device *dev = &pdev->dev;
+	struct hw_state *hw;
+	struct resource *res;
+
+	hw = devm_kzalloc(dev, sizeof(*hw), GFP_KERNEL);
+	if (!hw)
+		return -ENOMEM;
+
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	if (!res) {
+		dev_err(dev, "cannot find io space!\n");
+		return -ENODEV;
+	}
+	hw->io_pa = devm_ioremap_resource(dev, res);
+	if (IS_ERR(hw->io_pa))
+		return PTR_ERR(hw->io_pa);
+
+	hw->sm_va = dmam_alloc_coherent(dev, PAGE_SIZE, &hw->dma, GFP_KERNEL);
+	if (!hw->sm_va)
+		return -ENOMEM;
+
+	platform_set_drvdata(pdev, hw);
+
+	dev_info(dev,
+		 "init success with iobase=0x%llx, dma=0x%llx, sm_va=0x%llx\n",
+		 (unsigned long long)hw->io_pa,
+		 hw->dma, (unsigned long long)hw->sm_va);
+
+	return 0;
+}
+
+static int kenny_ghms_remove(struct platform_device *pdev)
+{
+	return 0;
+}
+
+static const struct of_device_id kenny_ghms_of_match[] = {
+	{.compatible = "kenny,ghms",},
+	{},
+};
+
+static struct platform_driver kenny_ghms_pdrv = {
+	.probe		= kenny_ghms_probe,
+	.remove		= kenny_ghms_remove,
+	.driver		= {
+		.name		= KENNY_GHMS,
+		.of_match_table = kenny_ghms_of_match,
+	},
+};
+
+module_platform_driver(kenny_ghms_pdrv);
+
+MODULE_AUTHOR("Kenneth Lee<liguozhu@hisilicon.com>");
+MODULE_LICENSE("GPL");
