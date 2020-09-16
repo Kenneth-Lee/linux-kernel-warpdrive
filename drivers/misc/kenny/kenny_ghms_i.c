@@ -20,17 +20,26 @@
 #define KENNY_GHMS "kenny_ghms"
 
 struct hw_state {
+	struct device *dev;
 	void *io_va;
 	dma_addr_t dma;
 	int *sm_va;
+	struct timer_list timer;
 	int private;
 };
+
+static void mem_update_timer(struct timer_list *timer)
+{
+	struct hw_state *hw = container_of(timer, struct hw_state, timer);
+	*hw->sm_va = jiffies;
+	mod_timer(&hw->timer, jiffies+5000);
+	dev_info(hw->dev, "timer on jiffies 0x%lx\n", jiffies);
+}
 
 static int kenny_ghms_probe(struct platform_device *pdev) {
 	struct device *dev = &pdev->dev;
 	struct hw_state *hw;
 	struct resource *res;
-	int pvt;
 
 	hw = devm_kzalloc(dev, sizeof(*hw), GFP_KERNEL);
 	if (!hw)
@@ -45,15 +54,15 @@ static int kenny_ghms_probe(struct platform_device *pdev) {
 	if (IS_ERR(hw->io_va))
 		return PTR_ERR(hw->io_va);
 
-	pvt = readq(hw->io_va);
-	writeq(pvt+10, hw->io_va);
-	hw->private = readq(hw->io_va);
-	dev_info(dev, "handshake %d to %d, expected increate 20\n",
-		 pvt, hw->private);
-
 	hw->sm_va = dmam_alloc_coherent(dev, PAGE_SIZE, &hw->dma, GFP_KERNEL);
 	if (!hw->sm_va)
 		return -ENOMEM;
+
+	hw->dev = dev;
+	timer_setup(&hw->timer, mem_update_timer, 0);
+	mod_timer(&hw->timer, jiffies+100);
+	writeq(hw->dma, hw->io_va); //set share physical address
+	dev_info(dev, "set dma(%llx) to io 0\n", hw->dma);
 
 	platform_set_drvdata(pdev, hw);
 
@@ -67,6 +76,11 @@ static int kenny_ghms_probe(struct platform_device *pdev) {
 
 static int kenny_ghms_remove(struct platform_device *pdev)
 {
+	struct hw_state *hw = platform_get_drvdata(pdev);
+	unsigned long flags;
+	local_irq_save(flags);
+	del_timer(&hw->timer);
+	local_irq_restore(flags);
 	return 0;
 }
 
