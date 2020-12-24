@@ -1,9 +1,5 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 /**
- * This module is used to test the framework of WarpDrive.
- *
- * It support a simular device as dummy_wd_dev in qemu and do almost the same.
- * But it is a "real" hardware to the OS, so we can test the iommu feature
  */
 
 #include <asm/page.h>
@@ -20,12 +16,16 @@
 
 #define KENNY_GHMS "kenny_ghms"
 
+#define IO_OFFSET_SM_DMA 0
+#define IO_OFFSET_IRQ_ACK 8
+
 struct hw_state {
 	struct device *dev;
 	void *io_va;
 	dma_addr_t dma;
 	int *sm_va;
 	struct timer_list timer;
+	bool use_level_irq;
 	int private;
 };
 
@@ -34,13 +34,29 @@ static void mem_update_timer(struct timer_list *timer)
 	struct hw_state *hw = container_of(timer, struct hw_state, timer);
 	*hw->sm_va = jiffies;
 	mod_timer(&hw->timer, jiffies+5000);
-	dev_info(hw->dev, "timer on jiffies 0x%lx\n", jiffies);
+	//dev_info(hw->dev, "timer on jiffies 0x%lx\n", jiffies);
+}
+
+static irqreturn_t ghms_irq_handler(int irq, void *opaqu)
+{
+	struct hw_state *hw = (struct hw_state *)opaqu;
+
+	dev_dbg(hw->dev, "ghms interrupt!\n");
+
+	if(hw->use_level_irq) {
+		writeq((u64)1, hw->io_va + IO_OFFSET_IRQ_ACK);
+	}
+
+	return IRQ_HANDLED;
 }
 
 static struct hw_state *kenny_ghms_init(struct device *dev,
-				        const struct resource *res)
+				        const struct resource *res,
+					unsigned int irq,
+					bool use_level_irq)
 {
 	struct hw_state *hw;
+	int ret;
 
 	hw = devm_kzalloc(dev, sizeof(*hw), GFP_KERNEL);
 	if (!hw)
@@ -57,13 +73,19 @@ static struct hw_state *kenny_ghms_init(struct device *dev,
 	hw->dev = dev;
 	timer_setup(&hw->timer, mem_update_timer, 0);
 	mod_timer(&hw->timer, jiffies+100);
-	writeq(hw->dma, hw->io_va); //set share physical address
+	writeq(hw->dma, hw->io_va + IO_OFFSET_SM_DMA);
 	dev_info(dev, "set dma(%llx) to io 0\n", hw->dma);
+	hw->use_level_irq = use_level_irq;
+
+	ret = devm_request_irq(dev, irq, ghms_irq_handler, 0,
+			       KENNY_GHMS, hw);
+	if (ret)
+		return ERR_PTR(ret);
 
 	dev_info(dev,
-		 "init success with iobase=0x%llx(%llx, %llx)",
+		 "init success with iobase=0x%llx(%llx, %llx), irq=%d(%s)\n",
 		 (unsigned long long)hw->io_va,
-		 res->start, res->end);
+		 res->start, res->end, irq, use_level_irq?"level":"edge");
 
 	return hw;
 }
@@ -81,6 +103,7 @@ static int kenny_ghms_probe(struct platform_device *pdev) {
 	struct device *dev = &pdev->dev;
 	struct hw_state *hw;
 	struct resource *res;
+	int irq;
 
 	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 	if (!res) {
@@ -88,7 +111,13 @@ static int kenny_ghms_probe(struct platform_device *pdev) {
 		return -ENODEV;
 	}
 
-	hw = kenny_ghms_init(dev, res);
+	irq = platform_get_irq(pdev, 0);
+	if (irq < 0) {
+		dev_err(dev, "cannot find irq!\n");
+		return -ENODEV;
+	}
+
+	hw = kenny_ghms_init(dev, res, irq, false);
 	if (IS_ERR(hw))
 		return PTR_ERR(hw);
 
@@ -107,6 +136,8 @@ static int kenny_ghms_pci_probe(struct pci_dev *pdev,
 {
 	struct device *dev = &pdev->dev;
 	struct hw_state *hw;
+	int vectors;
+	unsigned int irq;
 
 	if (pci_enable_device(pdev))
 		return -EINVAL;
@@ -114,15 +145,29 @@ static int kenny_ghms_pci_probe(struct pci_dev *pdev,
 	if (dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(32)))
 		return -EINVAL;
 
-	hw = kenny_ghms_init(dev, &pdev->resource[0]);
-	if (IS_ERR(hw))
+	vectors = pci_alloc_irq_vectors(pdev, 1, 1,
+		PCI_IRQ_LEGACY | PCI_IRQ_MSI | PCI_IRQ_MSIX);
+	if (vectors < 0) {
+		dev_err(&pdev->dev,
+			"failed to allocate interrupt vector (%d)\n", vectors);
+	}
+
+	irq = pci_irq_vector(pdev, 0); //assume it won't fail
+
+	hw = kenny_ghms_init(dev, &pdev->resource[0], irq, !pdev->msi_enabled);
+	if (IS_ERR(hw)) {
+		pci_free_irq_vectors(pdev);
 		return PTR_ERR(hw);
+	}
 
 	pci_set_drvdata(pdev, hw);
 	return 0;
 }
 
-static void kenny_ghms_pci_remove(struct pci_dev *pdev) {}
+static void kenny_ghms_pci_remove(struct pci_dev *pdev) {
+	pci_free_irq_vectors(pdev);
+}
+
 static void kenny_ghms_pci_shutdown(struct pci_dev *pdev) {}
 
 #define PCI_VENDOR_ID_QEMU 0x1234
