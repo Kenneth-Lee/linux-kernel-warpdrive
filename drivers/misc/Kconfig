@@ -463,6 +463,13 @@ config KENNY_GHMS
 
 	  If you don't know what to do here, say N.
 
+config KENNY_BBOX
+	tristate "Support Kenny's Black Box Device"
+	help
+	  Support to write running info to black box
+
+	  If you don't know what to do here, say N.
+
 source "drivers/misc/c2port/Kconfig"
 source "drivers/misc/eeprom/Kconfig"
 source "drivers/misc/cb710/Kconfig"
