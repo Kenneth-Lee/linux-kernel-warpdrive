@@ -58,20 +58,21 @@ static int kenny_bbox_probe(struct pci_dev *pdev,
 	if (dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(32)))
 		return -EINVAL;
 
+	hw = devm_kzalloc(dev, sizeof(*hw), GFP_KERNEL);
+	if (!hw)
+		return -ENOMEM;
+
 	vectors = pci_alloc_irq_vectors(pdev, 1, 1,
 		PCI_IRQ_LEGACY | PCI_IRQ_MSI | PCI_IRQ_MSIX);
 	if (vectors < 0) {
 		dev_err(&pdev->dev,
 			"failed to allocate interrupt vector (%d)\n", vectors);
-	}
+		hw->use_level_irq = true;
+	} else
+		hw->use_level_irq = false;
 
 	irq = pci_irq_vector(pdev, 0); //assume it won't fail
 
-	hw = devm_kzalloc(dev, sizeof(*hw), GFP_KERNEL);
-	if (!hw)
-		return -ENOMEM;
-
-	hw->use_level_irq = true;
 	hw->io_va = devm_ioremap_resource(dev, &pdev->resource[0]);
 	if (IS_ERR(hw->io_va))
 		return PTR_ERR(hw->io_va);
