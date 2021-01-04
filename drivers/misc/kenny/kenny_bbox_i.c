@@ -7,12 +7,13 @@
 #include <linux/kthread.h>
 #include <linux/module.h>
 #include <linux/mutex.h>
-#include <linux/platform_device.h>
 #include <linux/printk.h>
 #include <linux/sched/signal.h>
 #include <linux/slab.h>
 #include <linux/of_address.h>
-#include <linux/pci.h>
+#include <linux/virtio.h>
+#include <linux/virtio_config.h>
+#include <linux/virtio_ids.h>
 
 #define KENNY_BBOX "kenny-bbox"
 #define IO_OFFSET_SM_DMA 0
@@ -28,100 +29,64 @@ struct hw_state {
 	int private;
 };
 
-static irqreturn_t bbox_irq_handler(int irq, void *opaqu)
+static int kenny_bbox_probe(struct virtio_device *vdev)
 {
-	struct hw_state *hw = (struct hw_state *)opaqu;
-
-	dev_dbg(hw->dev, "bbox interrupt!\n");
-
-	/*
-	if(hw->use_level_irq) {
-		writeq((u64)1, hw->io_va + IO_OFFSET_IRQ_ACK);
-	}
-	*/
-
-	return IRQ_HANDLED;
-}
-
-static int kenny_bbox_probe(struct pci_dev *pdev,
-			    const struct pci_device_id *ent)
-{
-	struct device *dev = &pdev->dev;
+	struct device *dev = &vdev->dev;
 	struct hw_state *hw;
-	int vectors;
-	unsigned int irq;
-	int ret;
-
-	if (pci_enable_device(pdev))
-		return -EINVAL;
-
-	if (dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(32)))
-		return -EINVAL;
 
 	hw = devm_kzalloc(dev, sizeof(*hw), GFP_KERNEL);
 	if (!hw)
 		return -ENOMEM;
 
-	vectors = pci_alloc_irq_vectors(pdev, 1, 1,
-		PCI_IRQ_LEGACY | PCI_IRQ_MSI | PCI_IRQ_MSIX);
-	if (vectors < 0) {
-		dev_err(&pdev->dev,
-			"failed to allocate interrupt vector (%d)\n", vectors);
-		hw->use_level_irq = true;
-	} else
-		hw->use_level_irq = false;
+	virtio_device_ready(vdev);
 
-	irq = pci_irq_vector(pdev, 0); //assume it won't fail
+	dev_info(&vdev->dev, "%s\n", __FUNCTION__);
 
-	hw->io_va = devm_ioremap_resource(dev, &pdev->resource[0]);
-	if (IS_ERR(hw->io_va))
-		return PTR_ERR(hw->io_va);
-
-	hw->sm_va = dmam_alloc_coherent(dev, PAGE_SIZE, &hw->dma, GFP_KERNEL);
-	if (!hw->sm_va)
-		return -ENOMEM;
-
-	hw->dev = dev;
-	writeq(hw->dma, hw->io_va + IO_OFFSET_SM_DMA);
-	dev_info(dev, "set dma(%llx) to io 0\n", hw->dma);
-
-	ret = devm_request_irq(dev, irq, bbox_irq_handler, 0,
-			       KENNY_BBOX, hw);
-	if (ret)
-		return ret;
-
-	dev_info(dev,
-		 "init success with iobase=0x%llx(%llx, %llx), irq=%d(%s)\n",
-		 (unsigned long long)hw->io_va,
-		 pdev->resource[0].start, pdev->resource[0].end,
-		 irq, hw->use_level_irq?"level":"edge");
-
-	pci_set_drvdata(pdev, hw);
 	return 0;
 }
 
-static void kenny_bbox_remove(struct pci_dev *pdev) {
-	pci_free_irq_vectors(pdev);
+static void kenny_bbox_config_changed(struct virtio_device *vdev) {
+	dev_info(&vdev->dev, "%s\n", __FUNCTION__);
 }
 
-static void kenny_bbox_shutdown(struct pci_dev *pdev) {}
+static int kenny_bbox_validate(struct virtio_device *vdev) {
+	dev_info(&vdev->dev, "%s\n", __FUNCTION__);
+	return 0;
+}
 
-#define PCI_VENDOR_ID_QEMU 0x1234
-static const struct pci_device_id kenny_bbox_tbl[] = {
-	{PCI_VDEVICE(QEMU, 0x3001), 0},
-	{0, }
-};
-MODULE_DEVICE_TABLE(pci, kenny_bbox_tbl);
+static void kenny_bbox_remove(struct virtio_device *pdev) {
+	//pci_free_irq_vectors(pdev);
+}
 
-static struct pci_driver kenny_bbox_drv = {
-	.name     = KENNY_BBOX,
-	.id_table = kenny_bbox_tbl,
-	.probe    = kenny_bbox_probe,
-	.remove   = kenny_bbox_remove,
-	.shutdown = kenny_bbox_shutdown,
+static unsigned int features[] = {
+	1,
 };
 
-module_pci_driver(kenny_bbox_drv);
+static unsigned int features_legacy[] = {
+	1,
+	2,
+};
+
+static struct virtio_device_id id_table[] = {
+	{ VIRTIO_ID_KENNY, VIRTIO_DEV_ANY_ID },
+	{ 0 },
+};
+
+static struct virtio_driver kenny_bbox_drv = {
+	.feature_table = features,
+	.feature_table_size = ARRAY_SIZE(features),
+	.feature_table_legacy = features_legacy,
+	.feature_table_size_legacy = ARRAY_SIZE(features_legacy),
+	.driver.name =	KBUILD_MODNAME, //KENNY_BBOX?
+	.driver.owner =	THIS_MODULE,
+	.id_table =	id_table,
+	.validate =	kenny_bbox_validate,
+	.probe =	kenny_bbox_probe,
+	.remove =	kenny_bbox_remove,
+	.config_changed = kenny_bbox_config_changed,
+};
+
+module_virtio_driver(kenny_bbox_drv);
 
 MODULE_LICENSE("GPL");
 MODULE_DESCRIPTION("Kenny's Black Box Driver Module");
