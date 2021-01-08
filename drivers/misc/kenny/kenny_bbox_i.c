@@ -37,28 +37,56 @@ struct bbox_conf {
 	uint64_t flags;
 };
 
+struct bbox_record_set {
+	struct scatterlist sg[4];
+	struct scatterlist *sgs[4];
+	struct bbox_record rec[4];
+};
+
+static struct bbox_record_set *bbox_create_record(void)
+{
+	struct bbox_record_set *rs = kmalloc(sizeof(*rs), GFP_ATOMIC);
+	int i;
+	const int d0=0x11111111;
+	static int d=d0;
+
+	if (rs) {
+		for(i=0; i<4; i++) {
+			rs->rec[i].data1 = d;
+			d+=d0;
+			rs->rec[i].data2 = d;
+			d+=d0;
+		}
+		for(i=0; i<4; i++) {
+			rs->sgs[i] = &rs->sg[i];
+			sg_init_one(rs->sgs[i], &rs->rec[i], sizeof(rs->rec[0]));
+		}
+	}
+
+	return rs;
+}
+
 static void kenny_bbox_timer(struct timer_list *timer)
 {
 	struct hw_state *hw = container_of(timer, struct hw_state, timer);
+	struct bbox_record_set *brs = bbox_create_record();
 	unsigned long flags;
-	struct bbox_record *rec;
-	struct scatterlist top_sg, bottom_sg;
-	struct scatterlist *sgs[2] = { &top_sg, &bottom_sg };
 
 	mod_timer(&hw->timer, jiffies+5000);
+	if (!brs) {
+		dev_err(hw->dev, "no memory\n");
+		return;
+	}
 
 	spin_lock_irqsave(&hw->lock, flags);
 	if(hw->count < 10) {
-		rec = kmalloc(2*sizeof(*rec), GFP_ATOMIC);
-		if (rec) {
-			sg_init_one(&top_sg, &rec[0], sizeof(*rec));
-			sg_init_one(&bottom_sg, &rec[1], sizeof(*rec));
-			virtqueue_add_sgs(hw->vq, sgs, 1, 1, rec, GFP_ATOMIC);
+		if (brs) {
+			virtqueue_add_sgs(hw->vq, brs->sgs, 3, 1, brs, GFP_ATOMIC);
 			hw->count++;
 			if (unlikely(!virtqueue_kick(hw->vq)))
 				dev_err(hw->dev, "kick rec fail\n");
 			else
-				dev_info(hw->dev, "kick rec(%d) to other side\n", hw->count);
+				dev_info(hw->dev, "kick rec(%d) to other side: %llx\n", hw->count, (uint64_t)brs);
 		} else {
 			dev_err(hw->dev, "allocate rec fail %d\n", hw->count);
 		}
@@ -69,20 +97,22 @@ static void kenny_bbox_timer(struct timer_list *timer)
 static void req_done(struct virtqueue *vq)
 {
 	struct hw_state *hw = vq->vdev->priv;
-	struct bbox_record *rec;
-	unsigned int len;
+	struct bbox_record_set *brs;
+	int len;
 	unsigned long flags;
 
 	dev_info(hw->dev, "data come back (%d)\n", hw->count);
 
 	spin_lock_irqsave(&hw->lock, flags);
-	while ((rec = virtqueue_get_buf(hw->vq, &len)) != NULL) {
-		dev_info(hw->dev, "get rec %p\n", rec);
+	while ((brs = virtqueue_get_buf(hw->vq, &len)) != NULL) {
+		dev_info(hw->dev, "get rec %llx(%d): %llx, %llx\n", (uint64_t)brs, len, 
+			brs->rec[3].data1, brs->rec[3].data2);
 
 		if (len) {
 			hw->count--;
-			kfree(rec);
 		}
+
+		kfree(brs);
 	}
 	spin_unlock_irqrestore(&hw->lock, flags);
 
